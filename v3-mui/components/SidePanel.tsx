@@ -30,9 +30,11 @@ interface Extras {
   geometry?: { type: "FeatureCollection"; features: any[] } | null;
   geometry_file_path?: string;
 }
-interface Submitted extends RowData {
-  id: string; submitted_at: string; extras?: Extras | null;
-}
+type Submitted = RowData & {
+  id: string;
+  submitted_at: string;
+  extras?: Extras | null;
+};
 interface FileItem extends Attachment {
   innovation_id: string;
   innovation_description?: string | null;
