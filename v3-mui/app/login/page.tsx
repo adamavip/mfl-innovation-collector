@@ -104,27 +104,33 @@ export default function Login() {
         emailRedirectTo: `${siteUrl()}/dashboard`,
       },
     });
+    const EXISTS_MSG = "An account with this email already exists. Try signing in, or reset your password if you’ve forgotten it.";
     if (error) {
-      setFormError(error.message);
+      // With "Confirm email" disabled, a repeat signup comes back as a direct
+      // error ("User already registered") rather than an obfuscated user.
+      const exists = /already registered|already exists|user[_ ]?already[_ ]?exists/i.test(error.message);
+      setFormError(exists ? EXISTS_MSG : error.message);
       setBusy(false);
       setStage("");
       return;
     }
-    // Supabase obfuscates a repeat signup to avoid leaking which emails exist:
-    // it returns a user with an empty `identities` array instead of an error.
+    // With "Confirm email" enabled, Supabase instead obfuscates a repeat signup
+    // to avoid leaking which emails exist: a user with an empty `identities`
+    // array and no error. Kept so the check is correct in both project modes.
     if (data.user && (data.user.identities?.length ?? 0) === 0) {
-      setFormError("An account with this email already exists. Try signing in, or reset your password.");
+      setFormError(EXISTS_MSG);
       setBusy(false);
       setStage("");
       return;
     }
     if (data.session) {
-      // Email confirmation disabled in Supabase project settings → user is signed in.
+      // "Confirm email" disabled → the user is signed in immediately.
       setStage("Loading your workspace…");
       router.push("/dashboard");
       return;
     }
-    // Email confirmation required.
+    // Fallback for when "Confirm email" is re-enabled: no session yet, so the
+    // user must open the confirmation link before they can sign in.
     sentEmailRef.current = email;
     setView("confirm");
     setBusy(false);
