@@ -25,7 +25,7 @@ import {
 } from "@/lib/folio";
 
 type Mode = "signin" | "signup";
-type View = "form" | "confirm";
+type View = "form" | "confirm" | "forgot" | "reset-sent";
 
 // Base URL the confirmation email should return to. Prefer an explicit
 // NEXT_PUBLIC_SITE_URL (set in Vercel) so the link is correct regardless of
@@ -110,6 +110,14 @@ export default function Login() {
       setStage("");
       return;
     }
+    // Supabase obfuscates a repeat signup to avoid leaking which emails exist:
+    // it returns a user with an empty `identities` array instead of an error.
+    if (data.user && (data.user.identities?.length ?? 0) === 0) {
+      setFormError("An account with this email already exists. Try signing in, or reset your password.");
+      setBusy(false);
+      setStage("");
+      return;
+    }
     if (data.session) {
       // Email confirmation disabled in Supabase project settings → user is signed in.
       setStage("Loading your workspace…");
@@ -120,6 +128,34 @@ export default function Login() {
     sentEmailRef.current = email;
     setView("confirm");
     setBusy(false);
+    setStage("");
+  }
+
+  async function handleReset(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setFormError(null);
+    setFieldError({});
+    setStage("Sending reset link…");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${siteUrl()}/reset-password`,
+    });
+    if (error) {
+      setFormError(error.message);
+      setBusy(false);
+      setStage("");
+      return;
+    }
+    sentEmailRef.current = email;
+    setView("reset-sent");
+    setBusy(false);
+    setStage("");
+  }
+
+  function goForgot() {
+    setView("forgot");
+    setFormError(null);
+    setFieldError({});
     setStage("");
   }
 
@@ -293,6 +329,25 @@ export default function Login() {
                           sx={inputSx}
                         />
 
+                        {!isSignup && (
+                          <Box sx={{ mt: -1.5, textAlign: "right" }}>
+                            <Box
+                              component="button"
+                              type="button"
+                              onClick={goForgot}
+                              disabled={busy}
+                              sx={{
+                                border: 0, bgcolor: "transparent", p: 0, font: "inherit",
+                                fontFamily: DISPLAY, fontSize: 13, fontWeight: 700, color: INDIGO, cursor: "pointer",
+                                "&:hover": { textDecoration: "underline" },
+                                "&:disabled": { opacity: 0.4, cursor: "wait" },
+                              }}
+                            >
+                              Forgot password?
+                            </Box>
+                          </Box>
+                        )}
+
                         <Box aria-live="polite" role="status" sx={{ minHeight: 0 }}>
                           <Collapse in={!!formError} timeout={160} unmountOnExit>
                             <Alert
@@ -312,20 +367,7 @@ export default function Login() {
                           disabled={busy}
                           endIcon={!busy ? <ArrowForwardIcon /> : undefined}
                           startIcon={busy ? <CircularProgress size={16} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
-                          sx={{
-                            mt: 0.5,
-                            minHeight: 52,
-                            borderRadius: 999,
-                            fontFamily: DISPLAY,
-                            fontSize: 15,
-                            fontWeight: 700,
-                            bgcolor: INDIGO,
-                            color: "#fff",
-                            boxShadow: "none",
-                            transition: "transform .18s cubic-bezier(.2,.8,.2,1), background-color .18s",
-                            "&:hover": { bgcolor: INDIGO_DK, transform: "translateY(-1px)" },
-                            "&.Mui-disabled": { bgcolor: INDIGO, opacity: 0.55, color: "#fff", boxShadow: "none" },
-                          }}
+                          sx={submitSx}
                         >
                           {buttonLabel}
                         </Button>
@@ -353,6 +395,79 @@ export default function Login() {
                       </Box>
                     </Typography>
                   </>
+                ) : view === "forgot" ? (
+                  <>
+                    <Typography
+                      component="h1"
+                      sx={{ fontSize: { xs: 28, sm: 32 }, fontWeight: 800, lineHeight: 1.1, letterSpacing: "-0.02em", color: INK }}
+                    >
+                      Reset your password
+                    </Typography>
+                    <Typography sx={{ mt: 1, mb: 3.5, fontSize: 14.5, color: INK_SOFT, maxWidth: 380, lineHeight: 1.55 }}>
+                      Enter the email for your account and we&apos;ll send you a link to choose a new password.
+                    </Typography>
+
+                    <Box component="form" onSubmit={handleReset} noValidate>
+                      <Stack gap={2}>
+                        <TextField
+                          required
+                          autoFocus
+                          type="email"
+                          label="Email"
+                          autoComplete="email"
+                          inputMode="email"
+                          spellCheck={false}
+                          disabled={busy}
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="you@cgiar.org"
+                          fullWidth
+                          size="medium"
+                          sx={inputSx}
+                        />
+
+                        <Box aria-live="polite" role="status" sx={{ minHeight: 0 }}>
+                          <Collapse in={!!formError} timeout={160} unmountOnExit>
+                            <Alert severity="error" onClose={() => setFormError(null)} sx={{ borderRadius: 2.5, fontSize: 13 }}>
+                              {formError}
+                            </Alert>
+                          </Collapse>
+                        </Box>
+
+                        <Button
+                          type="submit"
+                          fullWidth
+                          disableElevation
+                          disabled={busy}
+                          endIcon={!busy ? <ArrowForwardIcon /> : undefined}
+                          startIcon={busy ? <CircularProgress size={16} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
+                          sx={submitSx}
+                        >
+                          {busy ? (stage || "Sending…") : "Send reset link"}
+                        </Button>
+                      </Stack>
+                    </Box>
+
+                    <Typography
+                      sx={{ mt: 3, fontSize: 13.5, color: INK_SOFT, display: "flex", gap: 1, alignItems: "center", justifyContent: "center" }}
+                    >
+                      Remembered it?
+                      <Box
+                        component="button"
+                        type="button"
+                        onClick={() => switchMode("signin")}
+                        disabled={busy}
+                        sx={{
+                          border: 0, bgcolor: "transparent", p: 0, font: "inherit",
+                          fontFamily: DISPLAY, fontWeight: 700, color: INDIGO, cursor: "pointer",
+                          "&:hover": { textDecoration: "underline" },
+                          "&:disabled": { opacity: 0.4, cursor: "wait" },
+                        }}
+                      >
+                        Back to sign in
+                      </Box>
+                    </Typography>
+                  </>
                 ) : (
                   <Stack alignItems="flex-start" gap={1.5}>
                     <Box
@@ -365,21 +480,33 @@ export default function Login() {
                       <CheckCircleRoundedIcon sx={{ fontSize: 26 }} />
                     </Box>
                     <Typography component="h1" sx={{ fontSize: 24, fontWeight: 800, color: INK, letterSpacing: "-0.02em" }}>
-                      Confirm your email
+                      {view === "reset-sent" ? "Check your email" : "Confirm your email"}
                     </Typography>
                     <Typography sx={{ fontSize: 14, color: INK_SOFT, lineHeight: 1.6 }}>
-                      We sent a confirmation link to{" "}
-                      <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
-                        {sentEmailRef.current}
-                      </Box>
-                      . Open it to activate your account and land in your workspace.
+                      {view === "reset-sent" ? (
+                        <>
+                          If an account exists for{" "}
+                          <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
+                            {sentEmailRef.current}
+                          </Box>
+                          , we&apos;ve sent a link to reset your password. Open it to choose a new one.
+                        </>
+                      ) : (
+                        <>
+                          We sent a confirmation link to{" "}
+                          <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
+                            {sentEmailRef.current}
+                          </Box>
+                          . Open it to activate your account and land in your workspace.
+                        </>
+                      )}
                     </Typography>
                     <Button
                       onClick={() => switchMode("signin")}
                       variant="text"
                       sx={{ mt: 1, color: INDIGO, fontWeight: 700, px: 0, "&:hover": { bgcolor: "transparent", textDecoration: "underline" } }}
                     >
-                      I’ll confirm later — go to sign in
+                      {view === "reset-sent" ? "Back to sign in" : "I’ll confirm later — go to sign in"}
                     </Button>
                   </Stack>
                 )}
@@ -509,6 +636,21 @@ function PanelFeature({ icon, text }: { icon: React.ReactNode; text: string }) {
     </Stack>
   );
 }
+
+const submitSx = {
+  mt: 0.5,
+  minHeight: 52,
+  borderRadius: 999,
+  fontFamily: DISPLAY,
+  fontSize: 15,
+  fontWeight: 700,
+  bgcolor: INDIGO,
+  color: "#fff",
+  boxShadow: "none",
+  transition: "transform .18s cubic-bezier(.2,.8,.2,1), background-color .18s",
+  "&:hover": { bgcolor: INDIGO_DK, transform: "translateY(-1px)" },
+  "&.Mui-disabled": { bgcolor: INDIGO, opacity: 0.55, color: "#fff", boxShadow: "none" },
+} as const;
 
 const inputSx = {
   "& .MuiOutlinedInput-root": {
