@@ -1,12 +1,16 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Autocomplete, Box, Button, Card, CardContent, Chip, FormControl, IconButton,
-  InputLabel, LinearProgress, MenuItem, Paper, Select, Snackbar, Stack, Step, StepButton,
-  Stepper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography,
+  Alert, AlertTitle, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress,
+  Collapse, Divider, Fade, FormControl, FormHelperText, IconButton, InputLabel, LinearProgress,
+  Link as MuiLink, MenuItem, Paper, Select, Snackbar, Stack, Step, StepButton, Stepper, Table,
+  TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
+import AddIcon from "@mui/icons-material/Add";
+import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import { getNames } from "country-list";
 
 import { supabase } from "@/lib/supabase";
@@ -15,18 +19,27 @@ import { LEAD_ORGANISATIONS, MAX_FILE_BYTES, ACCEPTED_FILES } from "@/lib/formTa
 import dynamic from "next/dynamic";
 
 const GeographyWidget = dynamic(() => import("./GeographyWidget").then(m => m.GeographyWidget), { ssr: false });
-
 const COUNTRIES = getNames().sort();
+const BUCKET = "mfl";
+
+// External reference links — provided once, reused via helpText helpers.
+const LINKS = {
+  koppen: "https://en.wikipedia.org/wiki/K%C3%B6ppen_climate_classification",
+  decimalDegrees: "https://www.fcc.gov/media/radio/dms-decimal",
+  agro: "https://obofoundry.org/ontology/agro.html",
+  envo: "https://obofoundry.org/ontology/envo.html",
+  agrovoc: "https://www.fao.org/agrovoc/",
+  to: "https://obofoundry.org/ontology/to.html",
+  ncbitaxon: "https://obofoundry.org/ontology/ncbitaxon.html",
+} as const;
 
 interface Attachment {
   filename: string;
   mime_type: string;
   size_bytes: number;
-  path: string;            // bucket path: <user_id>/<innovation_id>/<ts>_<filename>
+  path: string;
   description?: string;
 }
-
-const BUCKET = "mfl";
 
 export interface FormState {
   innovation_id: string;
@@ -34,77 +47,110 @@ export interface FormState {
   innovation_type: string;
   innovation_scale: string;
   scaling_readiness_level: string;
+  keywords: string;
   region: string;
   country: string;
   site_name: string;
   climate_class: string;
   latitude: string;
   longitude: string;
+  production_system: string;
   challenge_category: string;
   challenge_description: string;
+  indicators_measured: string;
   data_collected: string;
-  data_repository_url: string;
-  innovation_description_url: string;
+  data_repository_url: string;          // stored pipe-separated
+  innovation_description_url: string;   // stored pipe-separated
   link_another_aow: string;
-  years_tested: string;
+  start_year_tested: string;
+  end_year_tested: string;
   nb_actors_test_innovations: string;
-  actors_tested: string;       // pipe-separated, e.g. "Individual farmer | NGO / civil society"
+  actors_tested: string;
+  start_year_validated: string;
+  end_year_validated: string;
+  nb_actors_validation: string;
+  actors_validated: string;
+  scaling_readiness_validation: string;
   focal_point_name: string;
   focal_point_email: string;
   lead_organisation: string;
   co_developers: string;
   implementing_partners: string;
   sdg: string;
+  sdg_secondary: string;
+  sdg_tertiary: string;
   cgiar_food_security: string;
   cgiar_improved_livelihoods: string;
   cgiar_gender_equality: string;
   cgiar_environment_biodiversity: string;
   cgiar_climate_change: string;
+  barriers_to_scaling: string;
+  success_factors: string;
+  general_comments: string;
+  form_feedback: string;
   attachments: Attachment[];
   has_additional_geo: "" | "Y" | "N";
   geometry: { type: "FeatureCollection"; features: any[] } | null;
 }
 
 const STEPS = [
-  "Identification", "Site & geography", "Challenge & description",
-  "Testing & reach", "Organisations", "Impact & SDGs",
-  "Raw data", "Review",
+  "Identification",
+  "Site & geography",
+  "Challenge & data",
+  "Testing & validation",
+  "Organisations",
+  "Impact & SDGs",
+  "Adoption",
+  "Raw data & comments",
+  "Review",
 ];
 
 const REQUIRED: (keyof FormState)[] = [
   "innovation_id", "region", "country", "innovation_description", "innovation_type",
+  "innovation_description_url",
 ];
 
 const initialState = (): FormState => ({
   innovation_id: crypto.randomUUID(),
   innovation_description: "", innovation_type: "", innovation_scale: "", scaling_readiness_level: "",
+  keywords: "",
   region: "", country: "", site_name: "", climate_class: "", latitude: "", longitude: "",
-  challenge_category: "", challenge_description: "",
+  production_system: "",
+  challenge_category: "", challenge_description: "", indicators_measured: "",
   data_collected: "", data_repository_url: "", innovation_description_url: "", link_another_aow: "",
-  years_tested: "", nb_actors_test_innovations: "", actors_tested: "",
+  start_year_tested: "", end_year_tested: "", nb_actors_test_innovations: "", actors_tested: "",
+  start_year_validated: "", end_year_validated: "", nb_actors_validation: "", actors_validated: "", scaling_readiness_validation: "",
   focal_point_name: "", focal_point_email: "", lead_organisation: "", co_developers: "", implementing_partners: "",
-  sdg: "",
+  sdg: "", sdg_secondary: "", sdg_tertiary: "",
   cgiar_food_security: "", cgiar_improved_livelihoods: "", cgiar_gender_equality: "",
   cgiar_environment_biodiversity: "", cgiar_climate_change: "",
+  barriers_to_scaling: "", success_factors: "",
+  general_comments: "", form_feedback: "",
   attachments: [],
   has_additional_geo: "",
   geometry: null,
 });
 
-// Shared key — grid mode (rows[0]) and form mode read/write the same record.
-const DRAFT_KEY = "mfl-shared-record";
-const EDITING_KEY = "mfl-editing-id";
+const DRAFT_KEY        = "mfl-shared-record";
+const EDITING_KEY      = "mfl-editing-id";
+const ACTIVE_DRAFT_KEY = "mfl-active-draft-id";
+const INTRO_KEY        = "mfl-intro-dismissed";
 
 export function FormMode({ onDone }: { onDone?: () => void }) {
   const [state, setState] = useState<FormState>(initialState);
   const [activeStep, setActiveStep] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [submitStage, setSubmitStage] = useState("");
   const [snack, setSnack] = useState<{ severity: "success" | "error" | "info"; text: string } | null>(null);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [introOpen, setIntroOpen] = useState(true);
 
   useEffect(() => {
     setEditingId(localStorage.getItem(EDITING_KEY));
+    const armedDraft = localStorage.getItem(ACTIVE_DRAFT_KEY);
+    if (armedDraft) setActiveDraftId(armedDraft);
+    setIntroOpen(localStorage.getItem(INTRO_KEY) !== "1");
     const local = localStorage.getItem(DRAFT_KEY);
     if (!local) return;
     try {
@@ -119,8 +165,6 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     } catch {}
   }, []);
 
-  // localStorage caps each origin at ~5 MB; geometry can blow that out alone.
-  // Persist everything else; geometry stays in memory and rides to Supabase via Save Draft.
   function persistLocal(s: FormState) {
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify(s)); return; }
     catch {}
@@ -162,16 +206,17 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     if (u.user) {
       const draftRow = { __form_mode: true, ...state, ...(geometryPath ? { geometry_file_path: geometryPath } : {}) };
       if (activeDraftId) {
-        await supabase.from("drafts").update({
-          rows: [draftRow], updated_at: new Date().toISOString(),
-        }).eq("id", activeDraftId);
+        await supabase.from("drafts").update({ rows: [draftRow], updated_at: new Date().toISOString() }).eq("id", activeDraftId);
       } else {
         const { data } = await supabase.from("drafts").insert({
           user_id: u.user.id,
-          name: `Form · ${state.innovation_description || state.innovation_id.slice(0, 8)}`,
+          name: `Form · ${state.innovation_description?.slice(0, 60) || state.innovation_id.slice(0, 8)}`,
           rows: [draftRow],
         }).select().single();
-        if (data) setActiveDraftId(data.id);
+        if (data) {
+          setActiveDraftId(data.id);
+          try { localStorage.setItem(ACTIVE_DRAFT_KEY, data.id); } catch {}
+        }
       }
     }
     setSnack({
@@ -184,10 +229,14 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
   async function submit() {
     if (missing.length) { setSnack({ severity: "error", text: `Required: ${missing.join(", ")}` }); return; }
     setBusy(true);
+    setSubmitStage("Preparing…");
     const { data: u } = await supabase.auth.getUser();
 
     const { attachments = [], geometry = null, has_additional_geo,
-            latitude, longitude, years_tested, nb_actors_test_innovations,
+            latitude, longitude,
+            start_year_tested, end_year_tested,
+            start_year_validated, end_year_validated,
+            nb_actors_test_innovations, nb_actors_validation,
             ...rest } = state;
     const extras: Record<string, unknown> = {};
     if (attachments.length) extras.attachments = attachments;
@@ -195,6 +244,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     if (has_additional_geo === "Y" && geometry && geometry.features?.length) {
       extras.geometry = geometry;
       if (u.user) {
+        setSubmitStage("Uploading geometry…");
         const path = await uploadGeometry(u.user.id, state.innovation_id, geometry);
         if (path) { extras.geometry_file_path = path; geoUploadedTo = path; }
       }
@@ -203,21 +253,31 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
       ...rest,
       latitude:  latitude  ? Number(latitude)  : null,
       longitude: longitude ? Number(longitude) : null,
-      years_tested:               years_tested               ? Number(years_tested)               : null,
+      start_year_tested:          start_year_tested          ? Number(start_year_tested)          : null,
+      end_year_tested:            end_year_tested            ? Number(end_year_tested)            : null,
+      start_year_validated:       start_year_validated       ? Number(start_year_validated)       : null,
+      end_year_validated:         end_year_validated         ? Number(end_year_validated)         : null,
       nb_actors_test_innovations: nb_actors_test_innovations ? Number(nb_actors_test_innovations) : null,
+      nb_actors_validation:       nb_actors_validation       ? Number(nb_actors_validation)       : null,
       extras: Object.keys(extras).length ? extras : null,
     };
 
     const isEditing = !!editingId;
+    setSubmitStage(isEditing ? "Updating…" : "Submitting…");
     const { error } = isEditing
       ? await supabase.from("innovations").update(payload).eq("id", editingId!)
       : await supabase.from("innovations").insert({ ...payload, user_id: u.user?.id });
 
-    if (!error && activeDraftId && !isEditing) await supabase.from("drafts").delete().eq("id", activeDraftId);
+    if (!error && activeDraftId && !isEditing) {
+      setSubmitStage("Cleaning up draft…");
+      await supabase.from("drafts").delete().eq("id", activeDraftId);
+    }
     setBusy(false);
+    setSubmitStage("");
     if (error) { setSnack({ severity: "error", text: error.message }); return; }
     localStorage.removeItem(DRAFT_KEY);
     localStorage.removeItem(EDITING_KEY);
+    localStorage.removeItem(ACTIVE_DRAFT_KEY);
     setSnack({
       severity: "success",
       text: (isEditing ? "Innovation updated" : "Innovation submitted")
@@ -229,6 +289,10 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
 
   return (
     <Box sx={{ maxWidth: 1000, mx: "auto", p: 3 }}>
+      <Collapse in={introOpen}>
+        <IntroPanel onDismiss={() => { setIntroOpen(false); try { localStorage.setItem(INTRO_KEY, "1"); } catch {} }} />
+      </Collapse>
+
       <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4 }} nonLinear>
         {STEPS.map((label, i) => (
           <Step key={label} completed={i < activeStep}>
@@ -237,26 +301,40 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
         ))}
       </Stepper>
 
-      <Card variant="outlined">
+      <Card variant="outlined" sx={{ position: "relative", overflow: "hidden" }}>
+        <Fade in={busy} timeout={180} unmountOnExit>
+          <LinearProgress sx={{
+            position: "absolute", top: 0, left: 0, right: 0, height: 3, zIndex: 2,
+            bgcolor: "transparent",
+            "& .MuiLinearProgress-bar": { bgcolor: "success.main" },
+          }} />
+        </Fade>
         <CardContent sx={{ p: 4 }}>
           {activeStep === 0 && <IdentificationStep state={state} set={set} />}
           {activeStep === 1 && <SiteStep state={state} set={set} />}
           {activeStep === 2 && <ChallengeAndDataStep state={state} set={set} />}
-          {activeStep === 3 && <TestingStep state={state} set={set} />}
+          {activeStep === 3 && <TestingValidationStep state={state} set={set} />}
           {activeStep === 4 && <OrganisationsStep state={state} set={set} />}
           {activeStep === 5 && <ImpactStep state={state} set={set} />}
-          {activeStep === 6 && <RawDataStep state={state} set={set} />}
-          {activeStep === 7 && <ReviewStep state={state} missing={missing} />}
+          {activeStep === 6 && <AdoptionStep state={state} set={set} />}
+          {activeStep === 7 && <RawDataStep state={state} set={set} />}
+          {activeStep === 8 && <ReviewStep state={state} missing={missing} />}
         </CardContent>
       </Card>
 
-      <Stack direction="row" gap={1.5} mt={3} alignItems="center">
-        <Button onClick={() => setActiveStep(s => Math.max(0, s - 1))} disabled={activeStep === 0}>Back</Button>
+      <Stack direction="row" gap={1.5} mt={3} alignItems="center" flexWrap="wrap">
+        <Button onClick={() => setActiveStep(s => Math.max(0, s - 1))} disabled={activeStep === 0 || busy}>Back</Button>
         {activeStep < STEPS.length - 1 ? (
-          <Button variant="contained" onClick={() => setActiveStep(s => Math.min(STEPS.length - 1, s + 1))}>Next</Button>
+          <Button variant="contained" onClick={() => setActiveStep(s => Math.min(STEPS.length - 1, s + 1))} disabled={busy}>Next</Button>
         ) : (
-          <Button variant="contained" color="success" onClick={submit} disabled={busy || missing.length > 0}>
-            {editingId ? "Update innovation" : "Submit innovation"}
+          <Button
+            variant="contained"
+            color="success"
+            onClick={submit}
+            disabled={busy || missing.length > 0}
+            startIcon={busy ? <CircularProgress size={16} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
+          >
+            {busy ? submitStage || "Submitting…" : (editingId ? "Update innovation" : "Submit innovation")}
           </Button>
         )}
         {editingId && (
@@ -264,14 +342,17 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
             if (!confirm("Discard edit and start a new innovation?")) return;
             localStorage.removeItem(EDITING_KEY);
             localStorage.removeItem(DRAFT_KEY);
-            setState(initialState()); setEditingId(null); setActiveStep(0);
+            localStorage.removeItem(ACTIVE_DRAFT_KEY);
+            setState(initialState()); setEditingId(null); setActiveDraftId(null); setActiveStep(0);
           }} disabled={busy}>
             Cancel edit
           </Button>
         )}
         <Box sx={{ flexGrow: 1 }} />
         {editingId && <Chip color="warning" size="small" label="Editing existing innovation" />}
-        <Button variant="outlined" onClick={saveDraft} disabled={busy || !!editingId}>
+        <Button variant="outlined" onClick={saveDraft} disabled={busy || !!editingId}
+          startIcon={busy && !submitStage ? <CircularProgress size={14} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
+        >
           {activeDraftId ? "Update draft" : "Save draft"}
         </Button>
         {missing.length > 0 && (
@@ -286,7 +367,40 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
   );
 }
 
+// ─── Shared building blocks ─────────────────────────────────────────────────
+
 interface StepProps { state: FormState; set: <K extends keyof FormState>(k: K, v: FormState[K]) => void }
+
+function IntroPanel({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <Alert
+      severity="info"
+      icon={<LightbulbOutlinedIcon />}
+      onClose={onDismiss}
+      sx={{ mb: 3, "& .MuiAlert-message": { width: "100%" } }}
+    >
+      <AlertTitle sx={{ fontWeight: 700 }}>Before you start</AlertTitle>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        This form captures one MFL innovation record at a time. It writes directly to the central Supabase
+        database; uploads (raw data, geometry) go to the <code>mfl</code> Storage bucket. You can{" "}
+        <strong>save drafts</strong> at any step and resume later — drafts are stored against your account.
+      </Typography>
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        <strong>Required fields</strong> are marked with <Box component="span" sx={{ color: "error.main" }}>*</Box>{" "}
+        — innovation ID, region, country, innovation description, and innovation type. Dropdowns must match the
+        controlled vocabulary; pick <em>Other (specify)</em> when nothing fits and add your value inline.
+      </Typography>
+      <Typography variant="body2">
+        For free-text fields (challenge, indicators, descriptions), prefer terms from recognised ontologies:{" "}
+        <MuiLink href={LINKS.agro}    target="_blank" rel="noopener">AGRO</MuiLink>,{" "}
+        <MuiLink href={LINKS.envo}    target="_blank" rel="noopener">ENVO</MuiLink>,{" "}
+        <MuiLink href={LINKS.to}      target="_blank" rel="noopener">TO</MuiLink>,{" "}
+        <MuiLink href={LINKS.agrovoc} target="_blank" rel="noopener">AGROVOC</MuiLink>,{" "}
+        <MuiLink href={LINKS.ncbitaxon} target="_blank" rel="noopener">NCBITaxon</MuiLink>.
+      </Typography>
+    </Alert>
+  );
+}
 
 function SectionTitle({ n, title, subtitle }: { n: string; title: string; subtitle?: string }) {
   return (
@@ -298,35 +412,219 @@ function SectionTitle({ n, title, subtitle }: { n: string; title: string; subtit
   );
 }
 
+function HelpTip({ text }: { text: React.ReactNode }) {
+  return (
+    <Tooltip title={text} arrow placement="top">
+      <HelpOutlineIcon fontSize="small" sx={{ color: "text.secondary", fontSize: 16, ml: 0.5, verticalAlign: "middle", cursor: "help" }} />
+    </Tooltip>
+  );
+}
+
+/** Dropdown that always offers an "Other (specify)" option at the bottom. */
+function SelectWithOther({
+  label, required, value, onChange, options, helperText, descriptions,
+}: {
+  label: string; required?: boolean; value: string;
+  onChange: (next: string) => void; options: readonly string[]; helperText?: React.ReactNode;
+  /** Optional per-option subline shown inside the dropdown, not in the closed selector. */
+  descriptions?: Record<string, string>;
+}) {
+  const isOther = value === "Other" || value.startsWith("Other:");
+  const otherText = value.startsWith("Other:") ? value.replace(/^Other:\s*/, "") : "";
+  const selectValue = isOther ? "Other" : (options.includes(value) ? value : "");
+  return (
+    <Box>
+      <FormControl size="small" fullWidth required={required}>
+        <InputLabel>{label}{required ? " *" : ""}</InputLabel>
+        <Select
+          label={`${label}${required ? " *" : ""}`} value={selectValue}
+          renderValue={(v) => (v === "Other" ? "Other (specify)" : (v as string))}
+          onChange={(e) => {
+            const v = e.target.value as string;
+            if (v === "Other") onChange("Other");
+            else onChange(v);
+          }}
+        >
+          {options.map(o => (
+            <MenuItem key={o} value={o} sx={{ alignItems: "flex-start", py: 1 }}>
+              <Box sx={{ display: "flex", flexDirection: "column", whiteSpace: "normal", lineHeight: 1.3 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>{o}</Typography>
+                {descriptions?.[o] && (
+                  <Typography variant="caption" sx={{ color: "text.secondary", display: "block", maxWidth: 480 }}>
+                    {descriptions[o]}
+                  </Typography>
+                )}
+              </Box>
+            </MenuItem>
+          ))}
+          <MenuItem value="Other" sx={{ py: 1 }}><em>Other (specify)</em></MenuItem>
+        </Select>
+        {helperText && <FormHelperText>{helperText}</FormHelperText>}
+      </FormControl>
+      <Collapse in={isOther} timeout={180} unmountOnExit>
+        <TextField
+          autoFocus size="small" fullWidth sx={{ mt: 1 }} placeholder="Specify…"
+          value={otherText}
+          onChange={(e) => onChange(`Other: ${e.target.value}`)}
+        />
+      </Collapse>
+    </Box>
+  );
+}
+
+const URL_RE = /^https?:\/\//i;
+const isInvalidUrl = (u: string) => u.trim().length > 0 && !URL_RE.test(u.trim());
+
+/** A list of URL inputs persisted as a single pipe-separated string in `value`. */
+function MultiUrlField({
+  label, value, onChange, placeholder, helperText,
+}: {
+  label: string; value: string; onChange: (next: string) => void;
+  placeholder?: string; helperText?: React.ReactNode;
+}) {
+  const urls = value ? value.split(" | ").map(s => s.trim()) : [""];
+  const setIdx = (i: number, v: string) => {
+    const next = [...urls]; next[i] = v;
+    onChange(next.filter(s => s.length > 0).join(" | "));
+  };
+  const remove = (i: number) => {
+    const next = urls.filter((_, j) => j !== i);
+    onChange(next.filter(s => s.length > 0).join(" | "));
+  };
+  const add = () => onChange([...urls, ""].filter(s => s.length > 0).join(" | "));
+  const anyInvalid = urls.some(isInvalidUrl);
+  return (
+    <Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontWeight: 500 }}>
+        {label}
+      </Typography>
+      <Stack gap={1}>
+        {(urls.length ? urls : [""]).map((u, i) => {
+          const invalid = isInvalidUrl(u);
+          return (
+            <Stack key={i} direction="row" gap={1} alignItems="flex-start">
+              <TextField
+                size="small" fullWidth value={u}
+                onChange={(e) => setIdx(i, e.target.value)}
+                placeholder={placeholder ?? "https://…"}
+                type="url"
+                error={invalid}
+                helperText={invalid ? "URL must start with http:// or https://" : " "}
+              />
+              <IconButton size="small" onClick={() => remove(i)} disabled={urls.length <= 1 && !u} sx={{ mt: 0.5 }}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+          );
+        })}
+        <Box>
+          <Button size="small" startIcon={<AddIcon />} onClick={add} variant="text" disabled={anyInvalid}>
+            Add another URL
+          </Button>
+        </Box>
+        {helperText && <FormHelperText sx={{ mx: 0 }}>{helperText}</FormHelperText>}
+      </Stack>
+    </Box>
+  );
+}
+
+/** Reusable up-to-N multi-select autocomplete for pipe-separated text columns. */
+function MultiSelectField({
+  label, options, value, onChange, max, helperText, allowOther = true,
+}: {
+  label: string; options: readonly string[]; value: string;
+  onChange: (next: string) => void; max?: number;
+  helperText?: React.ReactNode; allowOther?: boolean;
+}) {
+  const selected = value ? value.split(" | ").map(s => s.trim()).filter(Boolean) : [];
+  const opts = allowOther ? [...options, "Other"] : [...options];
+  return (
+    <Autocomplete
+      multiple freeSolo={allowOther} size="small"
+      options={opts}
+      value={selected}
+      onChange={(_, v) => {
+        const next = max ? (v as string[]).slice(0, max) : (v as string[]);
+        onChange(next.join(" | "));
+      }}
+      renderTags={(value, getTagProps) =>
+        value.map((option, index) => (
+          <Chip variant="outlined" size="small" label={option} {...getTagProps({ index })} key={`${option}-${index}`} />
+        ))
+      }
+      renderInput={(p) => (
+        <TextField {...p} label={label} helperText={helperText}
+                   placeholder={max ? `Type or pick — up to ${max}` : "Type or pick"} />
+      )}
+    />
+  );
+}
+
+// ─── Step components ────────────────────────────────────────────────────────
+
 function IdentificationStep({ state, set }: StepProps) {
   return (
     <>
-      <SectionTitle n="01" title="Identification & innovation" subtitle="Unique identifier and innovation classification." />
+      <SectionTitle n="01" title="Identification & innovation" subtitle="Unique identifier, classification, and search keywords." />
       <Stack gap={2.5}>
         <TextField label="innovation_id (auto)" value={state.innovation_id} InputProps={{ readOnly: true }} size="small"
+                   helperText="Generated automatically and copied with every related upload."
                    sx={{ "& input": { fontFamily: "monospace", fontSize: 12 } }} />
-        <TextField required label="innovation_description" value={state.innovation_description} onChange={e => set("innovation_description", e.target.value)}
-                   inputProps={{ maxLength: 150 }} size="small" fullWidth />
+
+        <TextField
+          required label={<>innovation_description <HelpTip text="A short, plain-language description of the innovation (the official name plus a 1-line summary)." /></>}
+          value={state.innovation_description}
+          onChange={e => set("innovation_description", e.target.value)}
+          inputProps={{ maxLength: 300 }} size="small" fullWidth multiline minRows={2}
+        />
+
         <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <FormControl size="small" fullWidth required>
-            <InputLabel>innovation_type *</InputLabel>
-            <Select label="innovation_type *" value={state.innovation_type} onChange={e => set("innovation_type", e.target.value)}>
-              {taxonomy.innovation_type.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-            </Select>
-          </FormControl>
-          <FormControl size="small" fullWidth>
-            <InputLabel>innovation_scale</InputLabel>
-            <Select label="innovation_scale" value={state.innovation_scale} onChange={e => set("innovation_scale", e.target.value)}>
-              {taxonomy.innovation_scale.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-            </Select>
-          </FormControl>
+          <Box sx={{ flex: 1 }}>
+            <SelectWithOther
+              label="innovation_type" required
+              value={state.innovation_type}
+              onChange={v => set("innovation_type", v)}
+              options={taxonomy.innovation_type}
+            />
+          </Box>
+          <Box sx={{ flex: 1 }}>
+            <SelectWithOther
+              label="innovation_scale"
+              value={state.innovation_scale}
+              onChange={v => set("innovation_scale", v)}
+              options={taxonomy.innovation_scale}
+            />
+          </Box>
         </Stack>
+
         <FormControl size="small" fullWidth>
           <InputLabel>scaling_readiness_level</InputLabel>
-          <Select label="scaling_readiness_level" value={state.scaling_readiness_level} onChange={e => set("scaling_readiness_level", e.target.value)}>
+          <Select label="scaling_readiness_level"
+                  value={state.scaling_readiness_level}
+                  onChange={e => set("scaling_readiness_level", e.target.value)}>
             {taxonomy.scaling.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
           </Select>
+          <FormHelperText>
+            Four stages: Concept → Validated/Pilot → Scaling-ready → Institutionalized.
+          </FormHelperText>
         </FormControl>
+
+        <TextField
+          label={<>keywords <HelpTip text="Comma- or pipe-separated tags for discovery. Prefer ontology terms when possible." /></>}
+          value={state.keywords}
+          onChange={e => set("keywords", e.target.value)}
+          placeholder="e.g. agroforestry | maize | Kenya | conservation-ag"
+          size="small" fullWidth
+          helperText={
+            <>
+              Prefer terms from recognised ontologies:{" "}
+              <MuiLink href={LINKS.agrovoc} target="_blank" rel="noopener">AGROVOC</MuiLink>,{" "}
+              <MuiLink href={LINKS.agro}    target="_blank" rel="noopener">AGRO</MuiLink>,{" "}
+              <MuiLink href={LINKS.envo}    target="_blank" rel="noopener">ENVO</MuiLink>,{" "}
+              <MuiLink href={LINKS.to}      target="_blank" rel="noopener">TO</MuiLink>.
+            </>
+          }
+        />
       </Stack>
     </>
   );
@@ -349,6 +647,7 @@ function SiteStep({ state, set }: StepProps) {
             renderInput={(p) => <TextField {...p} required label="country *" size="small" />}
             sx={{ width: "100%" }} />
         </Stack>
+
         <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
           <TextField label="site_name" value={state.site_name} onChange={e => set("site_name", e.target.value)} size="small" fullWidth />
           <FormControl size="small" fullWidth>
@@ -356,14 +655,53 @@ function SiteStep({ state, set }: StepProps) {
             <Select label="climate_class" value={state.climate_class} onChange={e => set("climate_class", e.target.value)}>
               {taxonomy.climate.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
             </Select>
+            <FormHelperText>
+              Köppen–Geiger classification. Not sure which class fits?{" "}
+              <MuiLink href={LINKS.koppen} target="_blank" rel="noopener">See the Köppen map and descriptions</MuiLink>.
+            </FormHelperText>
           </FormControl>
         </Stack>
+
         <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <TextField label="latitude" type="number" inputProps={{ step: "0.000001", min: -90, max: 90 }}
-                     value={state.latitude} onChange={e => set("latitude", e.target.value)} size="small" fullWidth />
-          <TextField label="longitude" type="number" inputProps={{ step: "0.000001", min: -180, max: 180 }}
-                     value={state.longitude} onChange={e => set("longitude", e.target.value)} size="small" fullWidth />
+          <TextField
+            label="latitude" type="number"
+            inputProps={{ step: "0.000001", min: -90, max: 90 }}
+            value={state.latitude} onChange={e => set("latitude", e.target.value)}
+            size="small" fullWidth
+            error={state.latitude !== "" && (isNaN(Number(state.latitude)) || Number(state.latitude) < -90 || Number(state.latitude) > 90)}
+            helperText="Decimal degrees between −90 and 90."
+          />
+          <TextField
+            label="longitude" type="number"
+            inputProps={{ step: "0.000001", min: -180, max: 180 }}
+            value={state.longitude} onChange={e => set("longitude", e.target.value)}
+            size="small" fullWidth
+            error={state.longitude !== "" && (isNaN(Number(state.longitude)) || Number(state.longitude) < -180 || Number(state.longitude) > 180)}
+            helperText={
+              <>
+                Decimal degrees between −180 and 180.{" "}
+                <MuiLink href={LINKS.decimalDegrees} target="_blank" rel="noopener">Convert DMS → decimal</MuiLink>.
+              </>
+            }
+          />
         </Stack>
+
+        <SelectWithOther
+          label="production_system"
+          value={state.production_system}
+          onChange={v => set("production_system", v)}
+          options={taxonomy.production_system}
+          descriptions={{
+            "Mixed farming systems":                "Crop–livestock, often with cereals, legumes, fodder, and manure/nutrient cycling.",
+            "Staple-crop systems":                  "Rice, wheat, maize, roots/tubers, legumes, dryland cereals.",
+            "Animal and aquatic food systems":      "Livestock, pastoral/agro-pastoral systems, aquaculture, fisheries.",
+            "Natural-resource-based systems":       "Rainfed, irrigated, agroforestry, rangeland, and landscape systems.",
+            "Market- and nutrition-oriented systems": "Horticulture, peri-urban agriculture, diversified food systems.",
+          }}
+          helperText="Dominant production system at the site."
+        />
+
+        <Divider sx={{ my: 1 }} />
 
         <FormControl size="small" sx={{ maxWidth: 380 }}>
           <InputLabel>Do you have additional geographic information?</InputLabel>
@@ -376,12 +714,19 @@ function SiteStep({ state, set }: StepProps) {
         </FormControl>
 
         {state.has_additional_geo === "Y" && (
-          <Box mt={1}>
-            <Typography variant="caption" color="text.secondary" display="block" mb={1}>
-              Either upload a <strong>GeoJSON</strong> file (`.geojson` / `.json`) or a zipped <strong>Shapefile</strong>
-              (`.zip` containing `.shp`, `.shx`, `.dbf`); <em>or</em> draw points / polygons / rectangles / lines on the
-              map. Geometry is stored as GeoJSON (EPSG:4326) inside the innovation record.
-            </Typography>
+          <Box>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <AlertTitle sx={{ fontWeight: 700 }}>How to add geometry</AlertTitle>
+              <Typography variant="body2" component="div">
+                <ul style={{ margin: 0, paddingLeft: "1.2em" }}>
+                  <li>Search a place top-right, then use the toolbar (top-left) to draw a <strong>point</strong>, <strong>line</strong>, or <strong>polygon</strong>.</li>
+                  <li><strong>Double-click</strong> to finish a polyline or polygon.</li>
+                  <li><strong>Name every feature</strong> in the list under the map — names are saved with the GeoJSON and travel with the record.</li>
+                  <li>Use the trash tool to delete a feature, or the zoom icon next to a feature row to focus the map on it.</li>
+                  <li>Or upload a <strong>.geojson</strong> or zipped <strong>shapefile</strong>; everything you draw or upload is saved as one FeatureCollection both inline and as a file in the <code>mfl</code> bucket on submit.</li>
+                </ul>
+              </Typography>
+            </Alert>
             <GeographyWidget value={state.geometry} onChange={g => set("geometry", g)} />
           </Box>
         )}
@@ -393,64 +738,123 @@ function SiteStep({ state, set }: StepProps) {
 function ChallengeAndDataStep({ state, set }: StepProps) {
   return (
     <>
-      <SectionTitle n="03" title="Challenge & description" subtitle="What the innovation addresses, plus data assets and links." />
+      <SectionTitle n="03" title="Challenge, data & description" subtitle="What the innovation addresses, what data is collected, and where to find it." />
       <Stack gap={2.5}>
-        <FormControl size="small" fullWidth>
-          <InputLabel>challenge_category</InputLabel>
-          <Select label="challenge_category" value={state.challenge_category} onChange={e => set("challenge_category", e.target.value)}>
-            {taxonomy.challenge_cat.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-          </Select>
-        </FormControl>
-        <TextField label="challenge_description" value={state.challenge_description} onChange={e => set("challenge_description", e.target.value)}
-                   multiline minRows={3} inputProps={{ maxLength: 1000 }} fullWidth />
-        <FormControl size="small" fullWidth>
-          <InputLabel>data_collected</InputLabel>
-          <Select label="data_collected" value={state.data_collected} onChange={e => set("data_collected", e.target.value)}>
-            {taxonomy.data_collected.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-          </Select>
-        </FormControl>
-        <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <TextField label="data_repository_url" value={state.data_repository_url} onChange={e => set("data_repository_url", e.target.value)}
-                     placeholder="https://…" size="small" fullWidth />
-          <TextField label="innovation_description_url" value={state.innovation_description_url} onChange={e => set("innovation_description_url", e.target.value)}
-                     placeholder="https://…" size="small" fullWidth />
-        </Stack>
+        <SelectWithOther
+          label="challenge_category"
+          value={state.challenge_category}
+          onChange={v => set("challenge_category", v)}
+          options={taxonomy.challenge_cat}
+        />
+
+        <TextField
+          label={<>challenge_description <HelpTip text="Plain-language description of the challenge. Use ontology terms where possible." /></>}
+          value={state.challenge_description} onChange={e => set("challenge_description", e.target.value)}
+          multiline minRows={3} inputProps={{ maxLength: 1000 }} fullWidth
+          helperText="Use ontology terms (AGRO, ENVO) when they fit. Otherwise plain language."
+        />
+
+        <SelectWithOther
+          label="data_collected"
+          value={state.data_collected}
+          onChange={v => set("data_collected", v)}
+          options={taxonomy.data_collected}
+        />
+
+        <MultiSelectField
+          label="indicators_measured"
+          options={taxonomy.indicators_measured}
+          value={state.indicators_measured}
+          onChange={v => set("indicators_measured", v)}
+          helperText="Pick from common indicators or type your own. Always include the unit."
+        />
+
+        <MultiUrlField
+          label="data_repository_url(s)"
+          value={state.data_repository_url}
+          onChange={v => set("data_repository_url", v)}
+          placeholder="https://datadryad.org/…"
+          helperText="One row per repository or dataset. Public datasets only."
+        />
+
+        <MultiUrlField
+          label="innovation_description_url(s) *"
+          value={state.innovation_description_url}
+          onChange={v => set("innovation_description_url", v)}
+          placeholder="https://…"
+          helperText="Required — at least one public link describing the innovation (project page, brief, blog post). URLs must start with http:// or https://."
+        />
+
         <FormControl size="small" fullWidth>
           <InputLabel>link_another_aow</InputLabel>
           <Select label="link_another_aow" value={state.link_another_aow} onChange={e => set("link_another_aow", e.target.value)}>
             <MenuItem value=""><em>—</em></MenuItem>
             {taxonomy.aow.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
           </Select>
+          <FormHelperText>Link to another Area of Work, if applicable.</FormHelperText>
         </FormControl>
       </Stack>
     </>
   );
 }
 
-function TestingStep({ state, set }: StepProps) {
-  const selectedActors = state.actors_tested
-    ? state.actors_tested.split(" | ").map(s => s.trim()).filter(Boolean)
-    : [];
+function PhaseBlock({
+  title, prefix, state, set, includeReadiness = false,
+}: {
+  title: string;
+  prefix: "test" | "validation";
+  state: FormState;
+  set: StepProps["set"];
+  includeReadiness?: boolean;
+}) {
+  const startKey   = prefix === "test" ? "start_year_tested"          : "start_year_validated";
+  const endKey     = prefix === "test" ? "end_year_tested"            : "end_year_validated";
+  const nbKey      = prefix === "test" ? "nb_actors_test_innovations" : "nb_actors_validation";
+  const actorsKey  = prefix === "test" ? "actors_tested"              : "actors_validated";
+  const selected   = (state[actorsKey] as string) ? (state[actorsKey] as string).split(" | ").map(s => s.trim()).filter(Boolean) : [];
+  const startN = Number(state[startKey] as string);
+  const endN   = Number(state[endKey] as string);
+  const badRange = state[startKey] && state[endKey] && Number.isFinite(startN) && Number.isFinite(endN) && endN < startN;
   return (
-    <>
-      <SectionTitle n="04" title="Testing & reach" subtitle="Duration of testing, number of actors, and which kinds of actors tested the innovation." />
-      <Stack gap={2.5}>
+    <Paper variant="outlined" sx={{ p: 2.5 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 2 }}>{title}</Typography>
+      <Stack gap={2}>
         <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <TextField label="years_tested" type="number" inputProps={{ min: 0, max: 100, step: 1 }}
-                     helperText="Years during which the innovation was tested (0–100)"
-                     value={state.years_tested} onChange={e => set("years_tested", e.target.value)} size="small" fullWidth />
-          <TextField label="nb_actors_test_innovations" type="number" inputProps={{ min: 0, step: 1 }}
-                     helperText="Number of actors testing the innovation"
-                     value={state.nb_actors_test_innovations}
-                     onChange={e => set("nb_actors_test_innovations", e.target.value)} size="small" fullWidth />
+          <TextField
+            label={startKey}
+            type="number" inputProps={{ min: 1900, max: 2100, step: 1 }}
+            value={state[startKey] as string}
+            onChange={e => set(startKey, e.target.value)}
+            helperText="First calendar year."
+            size="small" fullWidth
+            placeholder="e.g. 1999"
+            error={!!badRange}
+          />
+          <TextField
+            label={endKey}
+            type="number" inputProps={{ min: 1900, max: 2100, step: 1 }}
+            value={state[endKey] as string}
+            onChange={e => set(endKey, e.target.value)}
+            helperText={badRange ? "End year must be ≥ start year." : "Final calendar year (or same as start for a single-year phase)."}
+            size="small" fullWidth
+            placeholder="e.g. 2002"
+            error={!!badRange}
+          />
+          <TextField
+            label={nbKey} type="number" inputProps={{ min: 0, step: 1 }}
+            value={state[nbKey] as string}
+            onChange={e => set(nbKey, e.target.value)}
+            helperText="Number of actors participating."
+            size="small" fullWidth
+          />
         </Stack>
         <Autocomplete
           multiple freeSolo size="small"
-          options={[...taxonomy.actor_types]}
-          value={selectedActors}
+          options={[...taxonomy.actor_types, "Other"]}
+          value={selected}
           onChange={(_, v) => {
             const next = (v as string[]).slice(0, 3);
-            set("actors_tested", next.join(" | "));
+            set(actorsKey, next.join(" | "));
           }}
           renderTags={(value, getTagProps) =>
             value.map((option, index) => (
@@ -458,10 +862,38 @@ function TestingStep({ state, set }: StepProps) {
             ))
           }
           renderInput={(p) => (
-            <TextField {...p} label="actors_tested" placeholder="Type or pick — up to 3"
-                       helperText={`Actor types that tested the innovation (max 3). ${selectedActors.length}/3 selected.`} />
+            <TextField {...p} label={`${actorsKey}`}
+                       placeholder="Type or pick — up to 3"
+                       helperText={`Up to 3 actor types. ${selected.length}/3 selected.`} />
           )}
         />
+        {includeReadiness && (
+          <FormControl size="small" fullWidth>
+            <InputLabel>scaling_readiness_validation</InputLabel>
+            <Select label="scaling_readiness_validation"
+                    value={state.scaling_readiness_validation}
+                    onChange={e => set("scaling_readiness_validation", e.target.value)}>
+              {taxonomy.scaling.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+            </Select>
+            <FormHelperText>Readiness at the end of validation — may differ from the overall level.</FormHelperText>
+          </FormControl>
+        )}
+      </Stack>
+    </Paper>
+  );
+}
+
+function TestingValidationStep({ state, set }: StepProps) {
+  return (
+    <>
+      <SectionTitle
+        n="04"
+        title="Testing & validation"
+        subtitle="Each phase can have its own duration, number of actors, and (for validation) scaling readiness."
+      />
+      <Stack gap={3}>
+        <PhaseBlock title="Testing phase"    prefix="test"       state={state} set={set} />
+        <PhaseBlock title="Validation phase" prefix="validation" state={state} set={set} includeReadiness />
       </Stack>
     </>
   );
@@ -483,7 +915,7 @@ function OrganisationsStep({ state, set }: StepProps) {
           renderInput={(p) => <TextField {...p} label="lead_organisation" size="small" />}
           sx={{ width: "100%" }} />
         <TextField label="co_developers" value={state.co_developers} onChange={e => set("co_developers", e.target.value)}
-                   helperText="Acronyms separated by |" size="small" fullWidth />
+                   helperText="Acronyms separated by | (e.g. CIMMYT | ICRISAT | IFPRI)" size="small" fullWidth />
         <TextField label="implementing_partners" value={state.implementing_partners} onChange={e => set("implementing_partners", e.target.value)}
                    helperText="Acronyms separated by |" size="small" fullWidth />
       </Stack>
@@ -501,15 +933,36 @@ function ImpactStep({ state, set }: StepProps) {
   ];
   return (
     <>
-      <SectionTitle n="06" title="Impact & SDGs" subtitle="Primary SDG and contribution ratings for the five CGIAR Impact Areas." />
+      <SectionTitle n="06" title="Impact & SDGs" subtitle="Up to three SDGs (primary, secondary, tertiary) and contribution ratings for the five CGIAR Impact Areas." />
       <Stack gap={2.5}>
-        <FormControl size="small" fullWidth>
-          <InputLabel>sdg</InputLabel>
-          <Select label="sdg" value={state.sdg} onChange={e => set("sdg", e.target.value)}>
-            {taxonomy.sdg.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-          </Select>
-        </FormControl>
-        <Typography variant="subtitle2" mt={1}>CGIAR Impact Area contribution</Typography>
+        <Typography variant="subtitle2">Sustainable Development Goals</Typography>
+        <Stack direction={{ xs: "column", sm: "row" }} gap={2} flexWrap="wrap">
+          <FormControl size="small" sx={{ minWidth: 260, flex: 1 }}>
+            <InputLabel>sdg (primary)</InputLabel>
+            <Select label="sdg (primary)" value={state.sdg} onChange={e => set("sdg", e.target.value)}>
+              <MenuItem value=""><em>—</em></MenuItem>
+              {taxonomy.sdg.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 260, flex: 1 }}>
+            <InputLabel>sdg_secondary</InputLabel>
+            <Select label="sdg_secondary" value={state.sdg_secondary} onChange={e => set("sdg_secondary", e.target.value)}>
+              <MenuItem value=""><em>—</em></MenuItem>
+              {taxonomy.sdg.filter(s => s !== state.sdg).map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ minWidth: 260, flex: 1 }}>
+            <InputLabel>sdg_tertiary</InputLabel>
+            <Select label="sdg_tertiary" value={state.sdg_tertiary} onChange={e => set("sdg_tertiary", e.target.value)}>
+              <MenuItem value=""><em>—</em></MenuItem>
+              {taxonomy.sdg.filter(s => s !== state.sdg && s !== state.sdg_secondary).map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+            </Select>
+          </FormControl>
+        </Stack>
+
+        <Divider />
+
+        <Typography variant="subtitle2">CGIAR Impact Area contribution</Typography>
         <Stack direction={{ xs: "column", sm: "row" }} flexWrap="wrap" gap={2}>
           {ratingFields.map(([key, label]) => (
             <FormControl size="small" sx={{ minWidth: 240, flex: 1 }} key={key}>
@@ -526,6 +979,36 @@ function ImpactStep({ state, set }: StepProps) {
   );
 }
 
+function AdoptionStep({ state, set }: StepProps) {
+  return (
+    <>
+      <SectionTitle n="07" title="Adoption — barriers & success factors" subtitle="Pick the categories that matter most; up to four each. Use 'Other' to add anything missing." />
+      <Stack gap={3}>
+        <Box>
+          <MultiSelectField
+            label="barriers_to_scaling"
+            options={taxonomy.barrier_categories}
+            value={state.barriers_to_scaling}
+            onChange={v => set("barriers_to_scaling", v)}
+            max={4}
+            helperText="The main reasons this innovation is hard to scale or sustain."
+          />
+        </Box>
+        <Box>
+          <MultiSelectField
+            label="success_factors"
+            options={taxonomy.success_factor_categories}
+            value={state.success_factors}
+            onChange={v => set("success_factors", v)}
+            max={4}
+            helperText="The conditions that made adoption work (peer learning, market access, policy, etc.)."
+          />
+        </Box>
+      </Stack>
+    </>
+  );
+}
+
 function RawDataStep({ state, set }: StepProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -534,13 +1017,11 @@ function RawDataStep({ state, set }: StepProps) {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
     setUploading(true); setError(null);
-
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) { setError("Sign in expired — refresh the page."); setUploading(false); return; }
-
     const added: Attachment[] = [];
     for (const f of files) {
-      if (f.size > MAX_FILE_BYTES) { setError(`${f.name}: exceeds 5 MB — skipped.`); continue; }
+      if (f.size > MAX_FILE_BYTES) { setError(`${f.name}: exceeds 50 MB — skipped.`); continue; }
       const safeName = f.name.replace(/[^\w.\-]/g, "_");
       const path = `${u.user.id}/${state.innovation_id}/${Date.now()}_${safeName}`;
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, f, {
@@ -563,18 +1044,15 @@ function RawDataStep({ state, set }: StepProps) {
 
   return (
     <>
-      <SectionTitle n="07" title="Raw data for effect sizes" subtitle="Upload supporting datasets that document the innovation's effect." />
-      <Paper variant="outlined" sx={{ p: 3, bgcolor: "#fff8e1", borderColor: "warning.light", borderStyle: "dashed" }}>
+      <SectionTitle n="08" title="Raw data, comments & feedback" subtitle="Attach curated datasets, leave general comments, and share feedback about the form itself." />
+
+      <Paper variant="outlined" sx={{ p: 3, bgcolor: "#fff8e1", borderColor: "warning.light", borderStyle: "dashed", mb: 3 }}>
         <Typography variant="body2" color="text.secondary" mb={2}>
           Please upload <strong>curated, analysis-ready datasets</strong> — clean tables with clear column names,
           units, treatment/control labels, and one observation per row. Well-structured files make it possible to
-          verify effect sizes, reuse the data in meta-analyses, and reproduce results. Avoid raw exports with
-          merged cells, mixed headers, or undocumented codes.
+          verify effect sizes, reuse the data in meta-analyses, and reproduce results. Accepted: CSV, Excel,
+          TSV, plain text, Word (.doc/.docx), PDF — up to 50 MB each. Files land in the <code>mfl</code> Storage bucket.
         </Typography>
-        <Typography variant="caption" color="text.secondary" display="block" mb={2}>
-          Accepted: CSV, Excel (.xlsx/.xls), TSV, plain text, Word (.doc/.docx), PDF — up to 5 MB each.
-        </Typography>
-
         {uploading && <LinearProgress sx={{ mb: 1 }} />}
         {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError(null)}>{error}</Alert>}
 
@@ -600,12 +1078,36 @@ function RawDataStep({ state, set }: StepProps) {
             ))}
           </Stack>
         )}
-
         <Button component="label" variant="contained" color="warning" startIcon={<AttachFileIcon />} disabled={uploading}>
           Attach file(s)
           <input type="file" hidden multiple accept={ACCEPTED_FILES} onChange={onPick} />
         </Button>
       </Paper>
+
+      <Stack gap={2.5}>
+        <TextField
+          label="general_comments"
+          value={state.general_comments}
+          onChange={e => set("general_comments", e.target.value)}
+          multiline minRows={3} inputProps={{ maxLength: 2000 }} fullWidth
+          helperText="Anything else worth noting about this innovation — caveats, context, related work."
+        />
+
+        <TextField
+          label="form_feedback"
+          value={state.form_feedback}
+          onChange={e => set("form_feedback", e.target.value)}
+          multiline minRows={3} inputProps={{ maxLength: 2000 }} fullWidth
+          helperText={
+            <>
+              Tell us how to improve the form — confusing fields, missing vocabularies, anything that slowed you down.
+              Stuck right now? Email{" "}
+              <MuiLink href="mailto:adama.ndour@cgiar.org">adama.ndour@cgiar.org</MuiLink>{" "}
+              and we'll help.
+            </>
+          }
+        />
+      </Stack>
     </>
   );
 }
@@ -613,7 +1115,7 @@ function RawDataStep({ state, set }: StepProps) {
 function ReviewStep({ state, missing }: { state: FormState; missing: (keyof FormState)[] }) {
   return (
     <>
-      <SectionTitle n="08" title="Review" subtitle="Verify the record before submission." />
+      <SectionTitle n="09" title="Review" subtitle="Verify the record before submission." />
       {missing.length > 0 && (
         <Alert severity="warning" sx={{ mb: 2 }}>Missing required: {missing.join(", ")}</Alert>
       )}
@@ -632,6 +1134,14 @@ function ReviewStep({ state, missing }: { state: FormState; missing: (keyof Form
           <TableRow>
             <TableCell sx={{ color: "text.secondary", fontFamily: "monospace", fontSize: 11 }}>attachments</TableCell>
             <TableCell>{(state.attachments ?? []).length} file(s)</TableCell>
+          </TableRow>
+          <TableRow>
+            <TableCell sx={{ color: "text.secondary", fontFamily: "monospace", fontSize: 11 }}>geometry</TableCell>
+            <TableCell>
+              {state.has_additional_geo === "Y" && state.geometry?.features?.length
+                ? `${state.geometry.features.length} feature(s)`
+                : <Box component="span" color="text.disabled">—</Box>}
+            </TableCell>
           </TableRow>
         </TableBody>
       </Table>

@@ -1,102 +1,518 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import {
-  Alert, Box, Button, Card, CardContent, CircularProgress, Fade, LinearProgress,
-  Stack, Tab, Tabs, TextField, Typography,
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Collapse,
+  Fade,
+  LinearProgress,
+  Stack,
+  TextField,
+  Typography,
 } from "@mui/material";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import VerifiedOutlinedIcon from "@mui/icons-material/VerifiedOutlined";
+import EditNoteOutlinedIcon from "@mui/icons-material/EditNoteOutlined";
+import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import { supabase } from "@/lib/supabase";
+import {
+  PEACH, INK, INK_SOFT, INDIGO, INDIGO_DK, DISPLAY,
+  FolioNav,
+} from "@/lib/folio";
+
+type Mode = "signin" | "signup";
+type View = "form" | "confirm";
 
 export default function Login() {
   const router = useRouter();
-  const [tab, setTab] = useState(0);
+  const [mode, setMode] = useState<Mode>("signin");
+  const [view, setView] = useState<View>("form");
+
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [busy, setBusy] = useState(false);
-  const [stage, setStage] = useState<string>("");
-  const [msg, setMsg] = useState<{ severity: "error" | "success"; text: string } | null>(null);
+  const [stage, setStage] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<{ password?: string; firstName?: string; lastName?: string }>({});
+  const sentEmailRef = useRef<string>("");
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setView("form");
+    setFormError(null);
+    setFieldError({});
+    setStage("");
+  }
 
   async function handle(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setMsg(null);
-    if (tab === 0) {
+    setBusy(true);
+    setFormError(null);
+    setFieldError({});
+
+    if (mode === "signin") {
       setStage("Authenticating…");
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) { setMsg({ severity: "error", text: error.message }); setBusy(false); setStage(""); return; }
+      if (error) {
+        const isCreds = /invalid|credentials|password/i.test(error.message);
+        setFormError(error.message);
+        if (isCreds) setFieldError({ password: "Email or password didn’t match." });
+        setBusy(false);
+        setStage("");
+        return;
+      }
       setStage("Loading your workspace…");
       router.push("/dashboard");
       return;
     }
-    setStage("Sending sign-in link…");
-    const { error } = await supabase.auth.signInWithOtp({
-      email, options: { emailRedirectTo: typeof window !== "undefined" ? `${window.location.origin}/dashboard` : undefined },
+
+    // Sign-up flow
+    const fe: typeof fieldError = {};
+    if (!firstName.trim()) fe.firstName = "Required";
+    if (!lastName.trim())  fe.lastName  = "Required";
+    if (password.length < 8) fe.password = "Use 8 characters or more.";
+    if (Object.keys(fe).length) { setFieldError(fe); setBusy(false); return; }
+
+    setStage("Creating your account…");
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          first_name: firstName.trim(),
+          last_name:  lastName.trim(),
+          phone_number: phone.trim() || null,
+        },
+        emailRedirectTo:
+          typeof window !== "undefined"
+            ? `${window.location.origin}/dashboard`
+            : undefined,
+      },
     });
-    if (error) setMsg({ severity: "error", text: error.message });
-    else setMsg({ severity: "success", text: "Check your inbox for the sign-in link." });
-    setBusy(false); setStage("");
+    if (error) {
+      setFormError(error.message);
+      setBusy(false);
+      setStage("");
+      return;
+    }
+    if (data.session) {
+      // Email confirmation disabled in Supabase project settings → user is signed in.
+      setStage("Loading your workspace…");
+      router.push("/dashboard");
+      return;
+    }
+    // Email confirmation required.
+    sentEmailRef.current = email;
+    setView("confirm");
+    setBusy(false);
+    setStage("");
   }
 
-  return (
-    <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", bgcolor: "background.default", p: 2, position: "relative" }}>
-      <Box sx={{ width: 400, maxWidth: "100%" }}>
-        <Link href="/" style={{ textDecoration: "none" }}>
-          <Typography variant="caption" color="text.secondary">← Back</Typography>
-        </Link>
-        <Typography variant="h5" sx={{ mt: 2, fontWeight: 700 }}>Sign in</Typography>
-        <Typography variant="body2" color="text.secondary">to MFL Innovation Collector</Typography>
+  const isSignup = mode === "signup";
+  const title    = isSignup ? "Create your account" : "Welcome back";
+  const subtitle = isSignup
+    ? "Set up your MFL Innovation Collector profile so your drafts, submissions, and uploads stay with you."
+    : "Sign in to draft, validate, and submit innovation records.";
+  const buttonLabel = busy ? (stage || (isSignup ? "Creating…" : "Signing in…")) : (isSignup ? "Create account" : "Sign in");
 
-        <Card variant="outlined" sx={{ mt: 2, position: "relative", overflow: "hidden" }}>
-          <Fade in={busy} timeout={200} unmountOnExit>
-            <LinearProgress sx={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 2 }} />
-          </Fade>
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth">
-            <Tab label="Email + password" disabled={busy} />
-            <Tab label="Magic link" disabled={busy} />
-          </Tabs>
-          <CardContent>
-            <form onSubmit={handle}>
-              <Stack gap={2}>
-                <TextField required type="email" label="Email" disabled={busy}
-                           value={email} onChange={e => setEmail(e.target.value)}
-                           placeholder="you@cgiar.org" />
-                {tab === 0 && (
-                  <TextField required type="password" label="Password" disabled={busy}
-                             value={password} onChange={e => setPassword(e.target.value)} />
+  return (
+    <Box sx={{ minHeight: "100svh", bgcolor: PEACH, p: { xs: 1.25, sm: 2, md: 3 }, display: "flex", flexDirection: "column" }}>
+      <Box
+        sx={{
+          flex: 1,
+          maxWidth: 1180,
+          width: "100%",
+          mx: "auto",
+          bgcolor: "#fff",
+          borderRadius: { xs: 5, md: "36px" },
+          overflow: "hidden",
+          boxShadow: "0 40px 90px rgba(22,19,58,0.12)",
+          display: "flex",
+          flexDirection: "column",
+          "& .MuiTypography-root": { fontFamily: DISPLAY },
+        }}
+      >
+        <FolioNav
+          links={[
+            { label: "Home", href: "/" },
+            { label: "Login", href: "/login", active: true },
+          ]}
+          maxWidth="100%"
+        />
+
+        <Box
+          sx={{
+            flex: 1,
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "0.95fr 1.05fr" },
+            alignItems: "stretch",
+          }}
+        >
+          {/* ── Left: indigo brand panel ─────────────────────────────────── */}
+          <Box
+            sx={{
+              display: { xs: "none", md: "flex" },
+              flexDirection: "column",
+              justifyContent: "space-between",
+              p: { md: 5, lg: 6 },
+              bgcolor: INDIGO,
+            }}
+          >
+            <Box sx={{ flex: 1, display: "grid", placeItems: "center", minHeight: 0, py: 2 }}>
+              <CubeArt />
+            </Box>
+
+            <Stack gap={1.75} sx={{ mt: 4 }}>
+              <PanelFeature icon={<VerifiedOutlinedIcon sx={{ fontSize: 18 }} />} text="Controlled vocabularies, validated at entry" />
+              <PanelFeature icon={<EditNoteOutlinedIcon sx={{ fontSize: 18 }} />} text="Draft-friendly — save and resume anytime" />
+              <PanelFeature icon={<HubOutlinedIcon sx={{ fontSize: 18 }} />} text="Centralised in one trusted record" />
+            </Stack>
+          </Box>
+
+          {/* ── Right: form ──────────────────────────────────────────────── */}
+          <Box sx={{ display: "grid", placeItems: "center", px: { xs: 2.5, sm: 5 }, py: { xs: 4, md: 6 } }}>
+            <Box sx={{ width: 420, maxWidth: "100%" }} aria-busy={busy}>
+              <Box sx={{ position: "relative" }}>
+                <Fade in={busy} timeout={180} unmountOnExit>
+                  <LinearProgress
+                    sx={{
+                      position: "absolute", top: -14, left: 0, right: 0, height: 2,
+                      borderRadius: 2, bgcolor: "transparent",
+                      "& .MuiLinearProgress-bar": { bgcolor: INDIGO },
+                    }}
+                  />
+                </Fade>
+
+                {view === "form" ? (
+                  <>
+                    <Typography
+                      component="h1"
+                      sx={{ fontSize: { xs: 28, sm: 32 }, fontWeight: 800, lineHeight: 1.1, letterSpacing: "-0.02em", color: INK }}
+                    >
+                      {title}
+                    </Typography>
+                    <Typography sx={{ mt: 1, mb: 3.5, fontSize: 14.5, color: INK_SOFT, maxWidth: 380, lineHeight: 1.55 }}>
+                      {subtitle}
+                    </Typography>
+
+                    <Box component="form" onSubmit={handle} noValidate>
+                      <Stack gap={2}>
+                        <Collapse in={isSignup} timeout={180} unmountOnExit>
+                          <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
+                            <TextField
+                              required={isSignup}
+                              autoFocus={isSignup}
+                              label="First name"
+                              autoComplete="given-name"
+                              disabled={busy}
+                              value={firstName}
+                              onChange={(e) => setFirstName(e.target.value)}
+                              error={!!fieldError.firstName}
+                              helperText={fieldError.firstName ?? " "}
+                              fullWidth
+                              size="medium"
+                              sx={inputSx}
+                            />
+                            <TextField
+                              required={isSignup}
+                              label="Last name"
+                              autoComplete="family-name"
+                              disabled={busy}
+                              value={lastName}
+                              onChange={(e) => setLastName(e.target.value)}
+                              error={!!fieldError.lastName}
+                              helperText={fieldError.lastName ?? " "}
+                              fullWidth
+                              size="medium"
+                              sx={inputSx}
+                            />
+                          </Stack>
+                        </Collapse>
+
+                        <TextField
+                          required
+                          autoFocus={!isSignup}
+                          type="email"
+                          label="Email"
+                          autoComplete="email"
+                          inputMode="email"
+                          spellCheck={false}
+                          disabled={busy}
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="you@cgiar.org"
+                          fullWidth
+                          size="medium"
+                          sx={inputSx}
+                        />
+
+                        <Collapse in={isSignup} timeout={180} unmountOnExit>
+                          <TextField
+                            type="tel"
+                            label="Phone number"
+                            autoComplete="tel"
+                            inputMode="tel"
+                            disabled={busy}
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            placeholder="+1 555 123 4567"
+                            helperText="Optional — used only for account recovery."
+                            fullWidth
+                            size="medium"
+                            sx={inputSx}
+                          />
+                        </Collapse>
+
+                        <TextField
+                          required
+                          type="password"
+                          label="Password"
+                          autoComplete={isSignup ? "new-password" : "current-password"}
+                          disabled={busy}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          fullWidth
+                          error={!!fieldError.password}
+                          helperText={fieldError.password ?? (isSignup ? "8 characters or more." : " ")}
+                          size="medium"
+                          sx={inputSx}
+                        />
+
+                        <Box aria-live="polite" role="status" sx={{ minHeight: 0 }}>
+                          <Collapse in={!!formError} timeout={160} unmountOnExit>
+                            <Alert
+                              severity="error"
+                              onClose={() => setFormError(null)}
+                              sx={{ borderRadius: 2.5, fontSize: 13 }}
+                            >
+                              {formError}
+                            </Alert>
+                          </Collapse>
+                        </Box>
+
+                        <Button
+                          type="submit"
+                          fullWidth
+                          disableElevation
+                          disabled={busy}
+                          endIcon={!busy ? <ArrowForwardIcon /> : undefined}
+                          startIcon={busy ? <CircularProgress size={16} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
+                          sx={{
+                            mt: 0.5,
+                            minHeight: 52,
+                            borderRadius: 999,
+                            fontFamily: DISPLAY,
+                            fontSize: 15,
+                            fontWeight: 700,
+                            bgcolor: INDIGO,
+                            color: "#fff",
+                            boxShadow: "none",
+                            transition: "transform .18s cubic-bezier(.2,.8,.2,1), background-color .18s",
+                            "&:hover": { bgcolor: INDIGO_DK, transform: "translateY(-1px)" },
+                            "&.Mui-disabled": { bgcolor: INDIGO, opacity: 0.55, color: "#fff", boxShadow: "none" },
+                          }}
+                        >
+                          {buttonLabel}
+                        </Button>
+                      </Stack>
+                    </Box>
+
+                    {/* Mode toggle */}
+                    <Typography
+                      sx={{ mt: 3, fontSize: 13.5, color: INK_SOFT, display: "flex", gap: 1, alignItems: "center", justifyContent: "center" }}
+                    >
+                      {isSignup ? "Already have an account?" : "New to MFL Innovation Collector?"}
+                      <Box
+                        component="button"
+                        type="button"
+                        onClick={() => switchMode(isSignup ? "signin" : "signup")}
+                        disabled={busy}
+                        sx={{
+                          border: 0, bgcolor: "transparent", p: 0, font: "inherit",
+                          fontFamily: DISPLAY, fontWeight: 700, color: INDIGO, cursor: "pointer",
+                          "&:hover": { textDecoration: "underline" },
+                          "&:disabled": { opacity: 0.4, cursor: "wait" },
+                        }}
+                      >
+                        {isSignup ? "Sign in" : "Create an account"}
+                      </Box>
+                    </Typography>
+                  </>
+                ) : (
+                  <Stack alignItems="flex-start" gap={1.5}>
+                    <Box
+                      sx={{
+                        width: 48, height: 48, borderRadius: "50%", display: "grid", placeItems: "center",
+                        bgcolor: "rgba(83,65,232,0.10)", color: INDIGO,
+                      }}
+                      aria-hidden
+                    >
+                      <CheckCircleRoundedIcon sx={{ fontSize: 26 }} />
+                    </Box>
+                    <Typography component="h1" sx={{ fontSize: 24, fontWeight: 800, color: INK, letterSpacing: "-0.02em" }}>
+                      Confirm your email
+                    </Typography>
+                    <Typography sx={{ fontSize: 14, color: INK_SOFT, lineHeight: 1.6 }}>
+                      We sent a confirmation link to{" "}
+                      <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
+                        {sentEmailRef.current}
+                      </Box>
+                      . Open it to activate your account and land in your workspace.
+                    </Typography>
+                    <Button
+                      onClick={() => switchMode("signin")}
+                      variant="text"
+                      sx={{ mt: 1, color: INDIGO, fontWeight: 700, px: 0, "&:hover": { bgcolor: "transparent", textDecoration: "underline" } }}
+                    >
+                      I’ll confirm later — go to sign in
+                    </Button>
+                  </Stack>
                 )}
-                {msg && <Alert severity={msg.severity}>{msg.text}</Alert>}
-                <Button
-                  type="submit" variant="contained" disabled={busy}
-                  startIcon={busy ? <CircularProgress size={16} color="inherit" thickness={5} /> : undefined}
-                  sx={{ minHeight: 40 }}
+              </Box>
+
+              {/* Footer */}
+              <Typography
+                sx={{ mt: 4, fontSize: 12, color: INK_SOFT, display: "flex", gap: 1.5, flexWrap: "wrap", alignItems: "center", justifyContent: "center" }}
+              >
+                <span>© CGIAR Multifunctional Landscapes</span>
+                <Box component="span" sx={{ width: 3, height: 3, borderRadius: "50%", bgcolor: "rgba(22,19,58,0.3)" }} aria-hidden />
+                <Box
+                  component="a"
+                  href="mailto:adama.ndour@cgiar.org"
+                  sx={{ color: INK_SOFT, textDecoration: "none", "&:hover": { color: INDIGO } }}
                 >
-                  {busy ? (stage || "Signing in…") : (tab === 0 ? "Sign in" : "Send magic link")}
-                </Button>
-              </Stack>
-            </form>
-          </CardContent>
-        </Card>
+                  Need help?
+                </Box>
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
       </Box>
 
-      <Fade in={busy} timeout={300} unmountOnExit>
-        <Box sx={{
-          position: "fixed", inset: 0, display: "grid", placeItems: "center", zIndex: 1300,
-          bgcolor: "rgba(245, 247, 250, 0.6)", backdropFilter: "blur(2px)", pointerEvents: "none",
-        }}>
-          <Stack alignItems="center" gap={1.5}>
-            <Box sx={{ position: "relative", display: "inline-flex" }}>
-              <CircularProgress size={56} thickness={4} />
-              <CircularProgress
-                size={56} thickness={4} variant="determinate" value={25}
-                sx={{ position: "absolute", left: 0, color: "primary.light", opacity: 0.3 }}
-              />
-            </Box>
-            <Typography variant="body2" color="primary.dark" sx={{ fontWeight: 600 }}>
-              {stage || "Working…"}
-            </Typography>
-          </Stack>
-        </Box>
-      </Fade>
+      <style jsx global>{`
+        @keyframes floaty {
+          0%, 100% { transform: translateY(0); }
+          50%      { transform: translateY(-12px); }
+        }
+        .flo { animation: floaty 6s ease-in-out infinite; will-change: transform; }
+        .flo.a { animation-duration: 6.5s; animation-delay: 0s; }
+        .flo.b { animation-duration: 7.2s; animation-delay: -1.2s; }
+        .flo.c { animation-duration: 5.8s; animation-delay: -0.6s; }
+        .flo.d { animation-duration: 6.9s; animation-delay: -2.0s; }
+        .flo.e { animation-duration: 4.8s; animation-delay: -0.4s; }
+        .flo.f { animation-duration: 5.2s; animation-delay: -1.6s; }
+        .flo.g { animation-duration: 5.6s; animation-delay: -0.9s; }
+
+        @media (prefers-reduced-motion: reduce) {
+          .flo { animation: none; }
+          .MuiLinearProgress-bar, .MuiCircularProgress-svg { animation-duration: 0.001ms !important; }
+        }
+      `}</style>
     </Box>
   );
 }
+
+// ── Isometric cube cluster (same vocabulary as the landing hero art) ──────────
+function poly(pts: number[][], fill: string) {
+  return <polygon points={pts.map((p) => p.join(",")).join(" ")} fill={fill} />;
+}
+function Cube({
+  x, y, w, h, top, left, right, cls,
+}: { x: number; y: number; w: number; h: number; top: string; left: string; right: string; cls?: string }) {
+  const T = [[x, y], [x + w, y + w / 2], [x, y + w], [x - w, y + w / 2]];
+  const L = [[x - w, y + w / 2], [x, y + w], [x, y + w + h], [x - w, y + w / 2 + h]];
+  const R = [[x, y + w], [x + w, y + w / 2], [x + w, y + w / 2 + h], [x, y + w + h]];
+  return (
+    <g className={cls}>
+      {poly(L, left)}
+      {poly(R, right)}
+      {poly(T, top)}
+    </g>
+  );
+}
+
+function CubeArt() {
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 420 460"
+      sx={{ width: "100%", maxWidth: 360, height: "auto", display: "block", overflow: "visible" }}
+      aria-hidden
+    >
+      <defs>
+        <radialGradient id="loginOrange" cx="35%" cy="30%" r="75%">
+          <stop offset="0%" stopColor="#FFB066" />
+          <stop offset="55%" stopColor="#FF7A2F" />
+          <stop offset="100%" stopColor="#ED5713" />
+        </radialGradient>
+        <radialGradient id="loginWhiteball" cx="32%" cy="28%" r="80%">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="100%" stopColor="#D8D8E8" />
+        </radialGradient>
+        <radialGradient id="loginFloor" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="rgba(18,12,60,0.45)" />
+          <stop offset="100%" stopColor="rgba(18,12,60,0)" />
+        </radialGradient>
+      </defs>
+
+      {/* grounded soft shadow */}
+      <ellipse cx="210" cy="410" rx="150" ry="30" fill="url(#loginFloor)" />
+
+      {/* pink cube (top) */}
+      <Cube x={214} y={70} w={66} h={74} top="#F8D7E2" left="#E7B2C6" right="#D89DB6" cls="flo a" />
+      {/* lavender cube (left) */}
+      <Cube x={108} y={196} w={58} h={66} top="#E9E5FA" left="#C7C0EE" right="#B0A7E2" cls="flo b" />
+      {/* blue cube (bottom center) */}
+      <Cube x={216} y={262} w={62} h={70} top="#7C6CF4" left="#5341E8" right="#3F2FC4" cls="flo c" />
+      {/* light cube (right) */}
+      <Cube x={322} y={206} w={60} h={68} top="#FFFFFF" left="#E6E6F1" right="#D2D2E2" cls="flo d" />
+
+      {/* orange sphere */}
+      <circle className="flo e" cx="204" cy="212" r="22" fill="url(#loginOrange)" />
+      {/* white spheres */}
+      <circle className="flo f" cx="120" cy="118" r="14" fill="url(#loginWhiteball)" />
+      <circle className="flo g" cx="324" cy="146" r="11" fill="url(#loginWhiteball)" />
+    </Box>
+  );
+}
+
+function PanelFeature({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <Stack direction="row" alignItems="center" gap={1.5}>
+      <Box
+        sx={{
+          flexShrink: 0, width: 34, height: 34, borderRadius: "50%",
+          display: "grid", placeItems: "center",
+          bgcolor: "rgba(255,255,255,0.16)", color: "#fff",
+        }}
+      >
+        {icon}
+      </Box>
+      <Typography sx={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.92)" }}>
+        {text}
+      </Typography>
+    </Stack>
+  );
+}
+
+const inputSx = {
+  "& .MuiOutlinedInput-root": {
+    borderRadius: 2.5,
+    "& fieldset": { borderColor: "rgba(22,19,58,0.16)" },
+    "&:hover fieldset": { borderColor: "rgba(22,19,58,0.34)" },
+    "&.Mui-focused fieldset": { borderWidth: 2, borderColor: INDIGO },
+    "&.Mui-focused .MuiInputBase-input::placeholder": {
+      color: "rgba(22,19,58,0.5)",
+      opacity: 1,
+    },
+  },
+  "& label.Mui-focused": { color: INDIGO },
+} as const;

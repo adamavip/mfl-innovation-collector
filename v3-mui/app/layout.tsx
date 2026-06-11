@@ -4,13 +4,21 @@ import "ag-grid-community/styles/ag-theme-material.css";
 import { AppRouterCacheProvider } from "@mui/material-nextjs/v14-appRouter";
 import { ThemeProvider } from "@mui/material/styles";
 import CssBaseline from "@mui/material/CssBaseline";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { theme } from "./theme";
+
+const display = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 export const metadata = { title: "MFL Innovation Data Collector" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={display.variable}>
       <body>
         <AppRouterCacheProvider>
           <ThemeProvider theme={theme}>

@@ -24,7 +24,10 @@ export function validateRow(row: RowData, rowIndex: number): RowError[] {
 
     if (col.type === "dropdown" && typeof col.dv === "string") {
       const allowed = taxonomy[col.dv] as readonly string[];
-      if (!allowed.includes(String(v))) {
+      const sv = String(v);
+      // Accept either a vocab match, or a free-form "Other: <text>" entry.
+      const isOther = sv === "Other" || sv.startsWith("Other:");
+      if (!allowed.includes(sv) && !isOther) {
         errs.push({ rowIndex, field: col.field, message: `Not in vocabulary` });
       }
     } else if (col.type === "integer" && Array.isArray(col.dv)) {

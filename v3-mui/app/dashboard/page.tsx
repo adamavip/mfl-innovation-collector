@@ -4,239 +4,125 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   AppBar, Box, Button, Chip, Snackbar, ToggleButton, ToggleButtonGroup,
-  Toolbar, Typography, Alert,
+  Toolbar, Typography, Alert, CircularProgress,
 } from "@mui/material";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
-import LayersClearIcon from "@mui/icons-material/LayersClear";
-import CheckBoxIcon from "@mui/icons-material/CheckBox";
-import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
-import TableRowsIcon from "@mui/icons-material/TableRows";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import EditNoteIcon from "@mui/icons-material/EditNote";
+import TableRowsIcon from "@mui/icons-material/TableRows";
+import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
+import InventoryOutlinedIcon from "@mui/icons-material/InventoryOutlined";
 import { FormMode } from "@/components/FormMode";
+import { WelcomeView } from "@/components/WelcomeView";
 import { AgGridReact } from "ag-grid-react";
 import type { ColDef, ColGroupDef } from "ag-grid-community";
-import { getNames } from "country-list";
 
 import { supabase } from "@/lib/supabase";
-import { COLS, GROUP_COLOURS, RowData, taxonomy } from "@/lib/taxonomy";
-import { isRowEmpty, validateAll, RowError } from "@/lib/validation";
+import { COLS, GROUP_COLOURS, RowData } from "@/lib/taxonomy";
 import { SidePanel } from "@/components/SidePanel";
-import { AutocompleteEditor } from "@/components/AutocompleteEditor";
+import { INK, INK_SOFT, INDIGO, HAIRLINE, DISPLAY, Logo } from "@/lib/folio";
 
-const COUNTRY_NAMES = getNames().sort();
-
-const DRAFT_KEY  = "mfl-draft-rows";
-const SHARED_KEY = "mfl-shared-record";   // first record, shared with form mode
+const SHARED_KEY = "mfl-shared-record";   // single record, shared with form mode
 const EDITING_KEY = "mfl-editing-id";
-const BLANK_ROWS = 25;
-const blank = (): RowData => ({});
+const ACTIVE_DRAFT_KEY = "mfl-active-draft-id";
+
+type Submitted = RowData & {
+  id: string;
+  submitted_at: string;
+  extras?: { attachments?: any[]; geometry?: any } | null;
+};
+
+function fmtDate(iso?: string) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
 
 export default function Dashboard() {
   const router = useRouter();
   const gridRef = useRef<AgGridReact>(null);
-  const [rows, setRows] = useState<RowData[]>(() => Array.from({ length: BLANK_ROWS }, blank));
-  const [errors, setErrors] = useState<RowError[]>([]);
   const [email, setEmail] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [snack, setSnack] = useState<{ severity: "success" | "error" | "warning" | "info"; text: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [selectedCount, setSelectedCount] = useState(0);
-  const [siteSuggestions, setSiteSuggestions] = useState<string[]>([]);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [mode, setMode] = useState<"grid" | "form">("form");
+  const [mode, setMode] = useState<"home" | "grid" | "form">("home");
   const [formKey, setFormKey] = useState(0);   // bump to force <FormMode> remount
+  const [profile, setProfile] = useState<{ first_name?: string | null; last_name?: string | null } | null>(null);
+
+  // Submitted innovations — the read-only recap shown in the Grid tab.
+  const [submitted, setSubmitted] = useState<Submitted[]>([]);
+  const [loadingGrid, setLoadingGrid] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) router.replace("/login");
-      else setEmail(data.user.email ?? null);
-    });
-    const local = localStorage.getItem(DRAFT_KEY);
-    if (local) try { setRows(JSON.parse(local)); } catch {}
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) { router.replace("/login"); return; }
+      setEmail(data.user.email ?? null);
+      // Fetch the mirrored profile row created on signup. Falls back gracefully
+      // if the row isn't there yet (legacy users) — greeting will use email.
+      const { data: p } = await supabase
+        .from("profiles")
+        .select("first_name, last_name")
+        .eq("id", data.user.id)
+        .maybeSingle();
+      if (p) setProfile(p);
+    })();
   }, [router]);
 
+  // Load the recap of submitted innovations whenever the workspace changes.
   useEffect(() => {
-    supabase.from("innovations").select("site_name").not("site_name", "is", null).then(({ data }) => {
-      if (!data) return;
-      const uniq = Array.from(new Set(data.map((d: any) => d.site_name).filter(Boolean))) as string[];
-      setSiteSuggestions(uniq.sort());
-    });
+    let cancelled = false;
+    (async () => {
+      setLoadingGrid(true);
+      const { data } = await supabase
+        .from("innovations")
+        .select("*")
+        .order("submitted_at", { ascending: false });
+      if (cancelled) return;
+      setSubmitted((data ?? []) as Submitted[]);
+      setLoadingGrid(false);
+    })();
+    return () => { cancelled = true; };
   }, [reloadKey]);
 
-  const groupedCols = useMemo<(ColDef | ColGroupDef)[]>(() => {
+  const columnDefs = useMemo<(ColDef | ColGroupDef)[]>(() => {
+    const submittedCol: ColDef = {
+      headerName: "Submitted",
+      field: "submitted_at",
+      width: 130,
+      pinned: "left",
+      valueFormatter: (p: any) => fmtDate(p.value),
+      sort: "desc",
+    };
+
     const groups: Record<string, ColDef[]> = {};
     for (const c of COLS) {
-      const isCountry  = c.field === "country";
-      const isSiteName = c.field === "site_name";
-      const isAutocomplete = isCountry || isSiteName;
-      const isFirst = c.field === COLS[0].field;
-      const colDef: ColDef = {
+      (groups[c.group] ||= []).push({
         field: c.field,
         headerName: c.field,
-        width: isFirst && selectionMode ? c.width + 40 : c.width,
-        editable: true,
-        checkboxSelection: isFirst && selectionMode,
-        headerCheckboxSelection: isFirst && selectionMode,
-        cellEditor: isAutocomplete
-          ? AutocompleteEditor
-          : c.type === "dropdown" ? "agSelectCellEditor" : "agTextCellEditor",
-        cellEditorPopup: isAutocomplete || undefined,
-        cellEditorParams: isCountry
-          ? { suggestions: COUNTRY_NAMES, placeholder: "Type a country…" }
-          : isSiteName
-          ? { suggestions: siteSuggestions, placeholder: "Type a site name…" }
-          : c.type === "dropdown" && typeof c.dv === "string"
-          ? { values: [...taxonomy[c.dv]] } : undefined,
-        cellStyle: (p: any) => errors.find(e => e.rowIndex === p.node.rowIndex && e.field === c.field)
-          ? { backgroundColor: "#fde7e7", color: "#b71c1c" } : null,
-        tooltipValueGetter: (p: any) => errors.find(e => e.rowIndex === p.node.rowIndex && e.field === c.field)?.message ?? "",
-      };
-      (groups[c.group] ||= []).push(colDef);
+        width: c.width,
+      });
     }
-    return Object.entries(groups).map(([g, children]) => ({
+    const grouped: ColGroupDef[] = Object.entries(groups).map(([g, children]) => ({
       headerName: g.toUpperCase(),
       headerClass: `grp-${g.replace(/[^a-z]/gi, "")}`,
       children,
     }));
-  }, [errors, siteSuggestions, selectionMode]);
 
-  function persist(next: RowData[]) { localStorage.setItem(DRAFT_KEY, JSON.stringify(next)); }
-
-  function loadDraft(d: { id: string; name: string; rows: RowData[] }) {
-    setActiveDraftId(d.id);
-    setErrors([]);
-    const padded = (d.rows ?? []).length < BLANK_ROWS
-      ? [...(d.rows ?? []), ...Array.from({ length: BLANK_ROWS - (d.rows ?? []).length }, blank)]
-      : d.rows;
-    setRows(padded); persist(padded);
-    setSnack({ severity: "info", text: `Loaded "${d.name}"` });
-  }
-
-  async function saveDraft() {
-    setBusy(true); persist(rows);
-    const { data: u } = await supabase.auth.getUser();
-    if (u.user) {
-      const cleanRows = rows.filter(r => !isRowEmpty(r));
-      if (activeDraftId) {
-        await supabase.from("drafts").update({ rows: cleanRows, updated_at: new Date().toISOString() }).eq("id", activeDraftId);
-      } else {
-        const { data } = await supabase.from("drafts").insert({
-          user_id: u.user.id,
-          name: `Draft ${new Date().toLocaleString()}`,
-          rows: cleanRows,
-        }).select().single();
-        if (data) setActiveDraftId(data.id);
-      }
-    }
-    setSnack({ severity: "success", text: "Draft saved" });
-    setReloadKey(k => k + 1);
-    setBusy(false);
-  }
-
-  async function submit() {
-    const errs = validateAll(rows);
-    setErrors(errs);
-    if (errs.length) { setSnack({ severity: "error", text: `${errs.length} validation error(s)` }); return; }
-    const toSend = rows.filter(r => !isRowEmpty(r));
-    if (!toSend.length) { setSnack({ severity: "warning", text: "No rows to submit" }); return; }
-    setBusy(true);
-    const { data: u } = await supabase.auth.getUser();
-    const { error } = await supabase.from("innovations").insert(toSend.map(r => ({ ...r, user_id: u.user?.id })));
-    if (!error && activeDraftId) await supabase.from("drafts").delete().eq("id", activeDraftId);
-    setBusy(false);
-    if (error) { setSnack({ severity: "error", text: error.message }); return; }
-    localStorage.removeItem(DRAFT_KEY);
-    setActiveDraftId(null);
-    setSnack({ severity: "success", text: `Submitted ${toSend.length} innovation(s)` });
-    setRows(Array.from({ length: BLANK_ROWS }, blank));
-    setReloadKey(k => k + 1);
-  }
-
-  function deleteSelected() {
-    const api = gridRef.current?.api;
-    if (!api) return;
-    const selectedRows = api.getSelectedRows() as RowData[];
-    if (!selectedRows.length) { setSnack({ severity: "info", text: "No rows selected" }); return; }
-    if (!confirm(`Delete ${selectedRows.length} selected row(s)?`)) return;
-    const selectedSet = new Set(selectedRows);
-    const next = rows.filter(r => !selectedSet.has(r));
-    const padded = next.length < BLANK_ROWS
-      ? [...next, ...Array.from({ length: BLANK_ROWS - next.length }, blank)]
-      : next;
-    setRows(padded); persist(padded);
-    setSelectedCount(0);
-    setSelectionMode(false);
-    setErrors([]);
-    setSnack({ severity: "success", text: `Deleted ${selectedRows.length} row(s)` });
-  }
-
-  function toggleSelectionMode() {
-    setSelectionMode(prev => {
-      const next = !prev;
-      if (!next) {
-        gridRef.current?.api?.deselectAll();
-        setSelectedCount(0);
-      }
-      return next;
-    });
-  }
-
-  function clearTable() {
-    if (!confirm("Clear the entire table? Unsaved entries will be lost.")) return;
-    const fresh = Array.from({ length: BLANK_ROWS }, blank);
-    setRows(fresh); persist(fresh);
-    setErrors([]); setSelectedCount(0); setActiveDraftId(null);
-    setSnack({ severity: "success", text: "Table cleared" });
-  }
-
-  // Form-mode and grid-mode share the first record. On mode switch, sync the latest
-  // edits between them so the user sees the same data on either side.
-  function changeMode(newMode: "grid" | "form") {
-    if (newMode === mode) return;
-    try {
-      if (newMode === "form") {
-        // Grid → form: row 0 (if any non-empty value) into the shared record.
-        const r0 = rows[0] ?? {};
-        const hasContent = COLS.some(c => {
-          const v = (r0 as any)[c.field];
-          return v !== undefined && v !== null && String(v).trim() !== "";
-        });
-        if (hasContent) {
-          const existing = JSON.parse(localStorage.getItem(SHARED_KEY) ?? "{}");
-          const fromRow: Record<string, unknown> = {};
-          for (const c of COLS) {
-            const v = (r0 as any)[c.field];
-            if (v !== undefined && v !== null && String(v) !== "") fromRow[c.field] = String(v);
-          }
-          localStorage.setItem(SHARED_KEY, JSON.stringify({ ...existing, ...fromRow }));
-        }
-        setFormKey(k => k + 1);
-      } else {
-        // Form → grid: shared record into row 0.
-        const recStr = localStorage.getItem(SHARED_KEY);
-        if (recStr) {
-          const rec = JSON.parse(recStr);
-          const row: RowData = {};
-          for (const c of COLS) {
-            if (rec[c.field] !== undefined && rec[c.field] !== "") row[c.field] = rec[c.field];
-          }
-          const next = [...rows];
-          next[0] = row;
-          setRows(next); persist(next);
-        }
-      }
-    } catch {}
-    setMode(newMode);
-  }
+    return [submittedCol, ...grouped];
+  }, []);
 
   // Open a submitted innovation in the form for edit/update.
   function loadInnovation(innov: any) {
     const recForForm: Record<string, unknown> = {};
     for (const c of COLS) recForForm[c.field] = (innov as any)[c.field] ?? "";
     // numeric → string for the form's TextField inputs
-    for (const k of ["latitude", "longitude", "years_tested", "nb_actors_test_innovations"]) {
+    for (const k of [
+      "latitude", "longitude",
+      "start_year_tested", "end_year_tested",
+      "start_year_validated", "end_year_validated",
+      "nb_actors_test_innovations", "nb_actors_validation",
+    ]) {
       const v = recForForm[k];
       recForForm[k] = v === null || v === undefined ? "" : String(v);
     }
@@ -251,37 +137,115 @@ export default function Dashboard() {
     setFormKey(k => k + 1);
   }
 
+  function exportCsv() {
+    if (!submitted.length) { setSnack({ severity: "info", text: "Nothing to export yet" }); return; }
+    gridRef.current?.api?.exportDataAsCsv({ fileName: `mfl-innovations-${new Date().toISOString().slice(0, 10)}.csv` });
+  }
+
+  // Welcome-view callbacks
+  function startNewInnovation() {
+    try {
+      localStorage.removeItem(SHARED_KEY);
+      localStorage.removeItem(EDITING_KEY);
+      localStorage.removeItem(ACTIVE_DRAFT_KEY);
+    } catch {}
+    setMode("form");
+    setFormKey(k => k + 1);
+  }
+
+  function resumeDraft(d: { id: string; name: string; rows?: any[] }) {
+    if (!d.rows?.[0]) { startNewInnovation(); return; }
+    try {
+      localStorage.setItem(SHARED_KEY, JSON.stringify(d.rows[0]));
+      localStorage.setItem(ACTIVE_DRAFT_KEY, d.id);
+      localStorage.removeItem(EDITING_KEY);
+    } catch {}
+    setMode("form");
+    setFormKey(k => k + 1);
+  }
+
+  function changeMode(newMode: "home" | "grid" | "form") {
+    if (newMode === mode) return;
+    if (newMode === "form") setFormKey(k => k + 1);
+    setMode(newMode);
+  }
+
   async function signOut() { await supabase.auth.signOut(); router.push("/"); }
 
   return (
     <Box sx={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-      <AppBar position="static" color="primary" elevation={0} sx={{ zIndex: (t) => t.zIndex.drawer + 1 }}>
-        <Toolbar variant="dense">
-          <Link href="/" style={{ color: "inherit", textDecoration: "none", flexGrow: 1 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>MFL Innovation Collector</Typography>
+      <AppBar
+        position="static"
+        elevation={0}
+        sx={{
+          bgcolor: "#fff",
+          color: INK,
+          borderBottom: `1px solid ${HAIRLINE}`,
+          zIndex: (t) => t.zIndex.drawer + 1,
+        }}
+      >
+        <Toolbar variant="dense" sx={{ gap: 2, minHeight: 60 }}>
+          <Link href="/" style={{ textDecoration: "none", flexShrink: 0 }} aria-label="Home">
+            <Logo />
           </Link>
+
+          <Box sx={{ flexGrow: 1 }} />
+
           <ToggleButtonGroup
             value={mode}
             exclusive
             size="small"
             onChange={(_, v) => v && changeMode(v)}
             sx={{
-              mr: 2,
-              bgcolor: "rgba(255,255,255,0.08)",
+              bgcolor: "rgba(22,19,58,0.05)",
+              borderRadius: 999,
+              p: 0.5,
+              gap: 0.5,
               "& .MuiToggleButton-root": {
-                color: "rgba(255,255,255,0.7)",
-                borderColor: "rgba(255,255,255,0.2)",
-                px: 1.5, py: 0.3,
-                "&.Mui-selected": { color: "#fff", bgcolor: "rgba(255,255,255,0.16)" },
+                border: 0,
+                borderRadius: "999px !important",
+                color: INK_SOFT,
+                fontFamily: DISPLAY,
+                fontWeight: 700,
+                textTransform: "none",
+                px: 1.75, py: 0.4,
+                "&:hover": { bgcolor: "rgba(22,19,58,0.06)" },
+                "&.Mui-selected": {
+                  color: "#fff",
+                  bgcolor: INDIGO,
+                  "&:hover": { bgcolor: INDIGO },
+                },
               },
             }}
           >
-            <ToggleButton value="grid"><TableRowsIcon fontSize="small" sx={{ mr: 0.5 }} />Grid</ToggleButton>
+            <ToggleButton value="home"><HomeOutlinedIcon fontSize="small" sx={{ mr: 0.5 }} />Home</ToggleButton>
             <ToggleButton value="form"><EditNoteIcon fontSize="small" sx={{ mr: 0.5 }} />Form</ToggleButton>
+            <ToggleButton value="grid"><TableRowsIcon fontSize="small" sx={{ mr: 0.5 }} />Grid</ToggleButton>
           </ToggleButtonGroup>
-          {activeDraftId && mode === "grid" && <Chip label="Editing draft" size="small" color="warning" sx={{ mr: 2 }} />}
-          <Typography variant="caption" sx={{ mr: 2, opacity: 0.8 }}>{email}</Typography>
-          <Button color="inherit" size="small" onClick={signOut}>Sign out</Button>
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          <Typography
+            variant="caption"
+            sx={{ color: INK_SOFT, fontWeight: 600, mr: 0.5, display: { xs: "none", sm: "block" }, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {email}
+          </Typography>
+          <Button
+            size="small"
+            onClick={signOut}
+            sx={{
+              borderRadius: 999,
+              px: 2,
+              fontFamily: DISPLAY,
+              fontWeight: 700,
+              color: INK,
+              border: "1.5px solid rgba(22,19,58,0.16)",
+              "&:hover": { borderColor: INK, bgcolor: "transparent" },
+            }}
+          >
+            Sign out
+          </Button>
         </Toolbar>
       </AppBar>
 
@@ -289,82 +253,96 @@ export default function Dashboard() {
         <SidePanel
           open={sidebarOpen}
           onToggle={() => setSidebarOpen(o => !o)}
-          onLoadDraft={loadDraft}
+          onLoadDraft={resumeDraft}
           onLoadInnovation={loadInnovation}
           reloadKey={reloadKey}
         />
 
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-          {mode === "form" ? (
+          {mode === "home" ? (
             <Box sx={{ flex: 1, overflow: "auto", bgcolor: "background.default" }}>
-              <FormMode key={formKey} onDone={() => setReloadKey(k => k + 1)} />
+              <WelcomeView
+                firstName={profile?.first_name ?? null}
+                email={email}
+                reloadKey={reloadKey}
+                onNew={startNewInnovation}
+                onBrowse={() => changeMode("grid")}
+                onResumeDraft={resumeDraft}
+                onEditInnovation={(s) => loadInnovation(s)}
+              />
+            </Box>
+          ) : mode === "form" ? (
+            <Box sx={{ flex: 1, overflow: "auto", bgcolor: "background.default" }}>
+              <FormMode key={formKey} onDone={() => { setReloadKey(k => k + 1); setMode("home"); }} />
             </Box>
           ) : (<>
           <Box sx={{ p: 2, display: "flex", gap: 1.5, alignItems: "center", borderBottom: 1, borderColor: "divider", bgcolor: "background.paper" }}>
-            <Button variant="contained" onClick={submit} disabled={busy}>Submit</Button>
-            <Button variant="outlined" onClick={saveDraft} disabled={busy}>
-              {activeDraftId ? "Update draft" : "Save draft"}
-            </Button>
-            <Button onClick={() => setRows(r => [...r, ...Array.from({ length: 5 }, blank)])}>+ 5 rows</Button>
-            <Box sx={{ flexGrow: 1 }} />
-            {errors.length > 0
-              ? <Chip color="error" label={`${errors.length} validation error(s)`} size="small" sx={{ mr: 1 }} />
-              : <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>Edit cells like a spreadsheet</Typography>}
-            <Button
-              variant={selectionMode ? "contained" : "outlined"}
-              color={selectionMode ? "primary" : "inherit"}
+            <InventoryOutlinedIcon fontSize="small" sx={{ color: "primary.main" }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: "primary.main" }}>
+              Submitted innovations
+            </Typography>
+            <Chip
               size="small"
-              startIcon={selectionMode ? <CheckBoxIcon /> : <CheckBoxOutlineBlankIcon />}
-              onClick={toggleSelectionMode}
+              label={loadingGrid ? "…" : `${submitted.length}`}
+              sx={{ height: 20, fontWeight: 600 }}
+            />
+            <Box sx={{ flexGrow: 1 }} />
+            <Typography variant="caption" color="text.secondary" sx={{ mr: 1, display: { xs: "none", md: "block" } }}>
+              Double-click a row to edit it in the form
+            </Typography>
+            <Button
+              variant="outlined" size="small" startIcon={<RefreshIcon />}
+              onClick={() => setReloadKey(k => k + 1)}
             >
-              {selectionMode ? `Selecting${selectedCount > 0 ? ` (${selectedCount})` : ""}` : "Select"}
+              Refresh
             </Button>
             <Button
-              variant="outlined" color="error" size="small"
-              startIcon={<DeleteSweepIcon />}
-              disabled={selectedCount === 0}
-              onClick={deleteSelected}
+              variant="outlined" size="small" startIcon={<FileDownloadOutlinedIcon />}
+              onClick={exportCsv}
+              disabled={loadingGrid || submitted.length === 0}
             >
-              Delete{selectedCount > 0 ? ` (${selectedCount})` : ""}
+              Export CSV
             </Button>
             <Button
-              variant="outlined" color="warning" size="small"
-              startIcon={<LayersClearIcon />}
-              onClick={clearTable}
+              variant="contained" size="small" startIcon={<AddCircleOutlineIcon />}
+              onClick={startNewInnovation}
             >
-              Clear table
+              New innovation
             </Button>
           </Box>
 
           <Box sx={{ flex: 1, p: 2, minHeight: 0 }}>
-            <div className="ag-theme-material" style={{ height: "100%", width: "100%", fontSize: 12 }}>
-              <AgGridReact
-                ref={gridRef}
-                rowData={rows}
-                columnDefs={groupedCols}
-                rowSelection="multiple"
-                suppressRowClickSelection
-                singleClickEdit
-                stopEditingWhenCellsLoseFocus
-                tooltipShowDelay={0}
-                onSelectionChanged={(e) => setSelectedCount(e.api.getSelectedNodes().length)}
-                onCellValueChanged={(e) => {
-                  const next = [...rows];
-                  next[e.node.rowIndex!] = { ...next[e.node.rowIndex!], [e.colDef.field!]: e.newValue };
-                  setRows(next); persist(next);
-                  if (e.node.rowIndex === 0) {
-                    try {
-                      const existing = JSON.parse(localStorage.getItem(SHARED_KEY) ?? "{}");
-                      localStorage.setItem(SHARED_KEY,
-                        JSON.stringify({ ...existing, [e.colDef.field!]: e.newValue }));
-                    } catch {}
-                  }
-                }}
-              />
-            </div>
+            {loadingGrid ? (
+              <Box sx={{ height: "100%", display: "grid", placeItems: "center" }}>
+                <CircularProgress />
+              </Box>
+            ) : submitted.length === 0 ? (
+              <Box sx={{ height: "100%", display: "grid", placeItems: "center", textAlign: "center" }}>
+                <Box>
+                  <InventoryOutlinedIcon sx={{ fontSize: 40, color: "text.disabled", mb: 1 }} />
+                  <Typography sx={{ fontWeight: 600, color: "text.secondary" }}>No submissions yet</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
+                    Submitted innovations will appear here as a reviewable table.
+                  </Typography>
+                  <Button variant="contained" startIcon={<AddCircleOutlineIcon />} onClick={startNewInnovation}>
+                    Start your first innovation
+                  </Button>
+                </Box>
+              </Box>
+            ) : (
+              <div className="ag-theme-material" style={{ height: "100%", width: "100%", fontSize: 12 }}>
+                <AgGridReact
+                  ref={gridRef}
+                  rowData={submitted}
+                  columnDefs={columnDefs}
+                  defaultColDef={{ sortable: true, filter: true, resizable: true, minWidth: 90 }}
+                  tooltipShowDelay={0}
+                  onRowDoubleClicked={(e) => e.data && loadInnovation(e.data)}
+                />
+              </div>
+            )}
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-              Required: innovation_id, region, country, innovation_name, innovation_type.
-              Dropdown cells must match the controlled vocabulary; URLs must start with http(s)://.
+              Read-only recap of everything you’ve submitted. Sort and filter any column; double-click a row to reopen it in the form for editing.
             </Typography>
           </Box>
           </>)}
