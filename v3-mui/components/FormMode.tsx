@@ -55,6 +55,7 @@ export interface FormState {
   latitude: string;
   longitude: string;
   production_system: string;
+  thematic_area: string;
   challenge_category: string;
   challenge_description: string;
   indicators_measured: string;
@@ -116,6 +117,7 @@ const initialState = (): FormState => ({
   keywords: "",
   region: "", country: "", site_name: "", climate_class: "", latitude: "", longitude: "",
   production_system: "",
+  thematic_area: "",
   challenge_category: "", challenge_description: "", indicators_measured: "",
   data_collected: "", data_repository_url: "", innovation_description_url: "", link_another_aow: "",
   start_year_tested: "", end_year_tested: "", nb_actors_test_innovations: "", actors_tested: "",
@@ -625,6 +627,24 @@ function IdentificationStep({ state, set }: StepProps) {
             </>
           }
         />
+
+        <SelectWithOther
+          label="thematic_area"
+          value={state.thematic_area}
+          onChange={v => set("thematic_area", v)}
+          options={taxonomy.thematic_area}
+          descriptions={{
+            "Agroecological Production Systems":          "Sustainable, biodiversity-based production and agroecological transitions.",
+            "Commons and Protected Areas":                "Conservation, restoration and governance of shared and protected landscapes.",
+            "Waterscapes and Water Security":             "Water resources, watersheds, and water-related ecosystem services.",
+            "Nutritionscapes and Livelihood Resilience":  "Nutrition, food security and resilient rural livelihoods.",
+            "Knowledge, Advisory and Scaling Pathways":   "Knowledge systems, advisory services and pathways to scale.",
+            "Markets, Value Chains and PES":              "Markets, value chains and payments for ecosystem services.",
+            "Governance and GESI":                        "Governance, gender equality and social inclusion.",
+            "Policy":                                     "Policy engagement, instruments and enabling environments.",
+          }}
+          helperText="The MFL thematic area this innovation best fits. Pick Other (specify) if it spans a theme not listed."
+        />
       </Stack>
     </>
   );
@@ -740,11 +760,12 @@ function ChallengeAndDataStep({ state, set }: StepProps) {
     <>
       <SectionTitle n="03" title="Challenge, data & description" subtitle="What the innovation addresses, what data is collected, and where to find it." />
       <Stack gap={2.5}>
-        <SelectWithOther
+        <MultiSelectField
           label="challenge_category"
+          options={taxonomy.challenge_cat}
           value={state.challenge_category}
           onChange={v => set("challenge_category", v)}
-          options={taxonomy.challenge_cat}
+          helperText="Pick one or more challenge categories the innovation addresses, or type your own."
         />
 
         <TextField
@@ -754,11 +775,12 @@ function ChallengeAndDataStep({ state, set }: StepProps) {
           helperText="Use ontology terms (AGRO, ENVO) when they fit. Otherwise plain language."
         />
 
-        <SelectWithOther
+        <MultiSelectField
           label="data_collected"
+          options={taxonomy.data_collected}
           value={state.data_collected}
           onChange={v => set("data_collected", v)}
-          options={taxonomy.data_collected}
+          helperText="Pick one or more data types collected, or type your own."
         />
 
         <MultiSelectField
