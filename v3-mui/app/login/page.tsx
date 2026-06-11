@@ -27,6 +27,16 @@ import {
 type Mode = "signin" | "signup";
 type View = "form" | "confirm";
 
+// Base URL the confirmation email should return to. Prefer an explicit
+// NEXT_PUBLIC_SITE_URL (set in Vercel) so the link is correct regardless of
+// where the user signed up; fall back to the current origin in the browser.
+function siteUrl() {
+  const env = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+  if (env) return env;
+  if (typeof window !== "undefined") return window.location.origin;
+  return "";
+}
+
 export default function Login() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("signin");
@@ -91,10 +101,7 @@ export default function Login() {
           last_name:  lastName.trim(),
           phone_number: phone.trim() || null,
         },
-        emailRedirectTo:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/dashboard`
-            : undefined,
+        emailRedirectTo: `${siteUrl()}/dashboard`,
       },
     });
     if (error) {
