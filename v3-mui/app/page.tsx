@@ -1,4 +1,5 @@
 "use client";
+import { useEffect } from "react";
 import { Box, Stack, Typography } from "@mui/material";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import VerifiedOutlinedIcon from "@mui/icons-material/VerifiedOutlined";
@@ -129,6 +130,16 @@ function ServiceCard({
 }
 
 export default function Landing() {
+  // Supabase password-recovery links redirect to the project's Site URL (this
+  // root) with the token in the URL fragment. The landing page doesn't load the
+  // auth client, so forward the token to /reset-password, which consumes it.
+  useEffect(() => {
+    const { hash, search } = window.location;
+    if (/type=recovery/.test(hash) || /type=recovery/.test(search)) {
+      window.location.replace(`/reset-password${search}${hash}`);
+    }
+  }, []);
+
   const navLinks = [
     { label: "Home", href: "/", active: true },
     { label: "Overview", href: "#overview" },

@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import MailOutlineRoundedIcon from "@mui/icons-material/MailOutlineRounded";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import VerifiedOutlinedIcon from "@mui/icons-material/VerifiedOutlined";
 import EditNoteOutlinedIcon from "@mui/icons-material/EditNoteOutlined";
@@ -25,7 +26,16 @@ import {
 } from "@/lib/folio";
 
 type Mode = "signin" | "signup";
-type View = "form" | "confirm" | "forgot" | "reset-sent";
+type View = "form" | "confirm" | "forgot";
+
+// Where password-reset requests are routed while self-service recovery emails
+// aren't yet reliably delivered to the various CG-center inboxes.
+const SUPPORT_EMAIL = "adama.ndour@cgiar.org";
+const RESET_MAILTO = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+  "MFL Innovation Collector — Password reset request",
+)}&body=${encodeURIComponent(
+  "Hi Adama,\n\nI've forgotten my password for the MFL Innovation Collector. Please help me reset it.\n\nMy account email: \n\nThanks!",
+)}`;
 
 // Base URL the confirmation email should return to. Prefer an explicit
 // NEXT_PUBLIC_SITE_URL (set in Vercel) so the link is correct regardless of
@@ -133,27 +143,6 @@ export default function Login() {
     // user must open the confirmation link before they can sign in.
     sentEmailRef.current = email;
     setView("confirm");
-    setBusy(false);
-    setStage("");
-  }
-
-  async function handleReset(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setFormError(null);
-    setFieldError({});
-    setStage("Sending reset link…");
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${siteUrl()}/reset-password`,
-    });
-    if (error) {
-      setFormError(error.message);
-      setBusy(false);
-      setStage("");
-      return;
-    }
-    sentEmailRef.current = email;
-    setView("reset-sent");
     setBusy(false);
     setStage("");
   }
@@ -402,78 +391,50 @@ export default function Login() {
                     </Typography>
                   </>
                 ) : view === "forgot" ? (
-                  <>
-                    <Typography
-                      component="h1"
-                      sx={{ fontSize: { xs: 28, sm: 32 }, fontWeight: 800, lineHeight: 1.1, letterSpacing: "-0.02em", color: INK }}
+                  <Stack alignItems="flex-start" gap={1.75}>
+                    <Box
+                      sx={{
+                        width: 48, height: 48, borderRadius: "50%", display: "grid", placeItems: "center",
+                        bgcolor: "rgba(83,65,232,0.10)", color: INDIGO,
+                      }}
+                      aria-hidden
                     >
+                      <MailOutlineRoundedIcon sx={{ fontSize: 26 }} />
+                    </Box>
+                    <Typography component="h1" sx={{ fontSize: { xs: 24, sm: 26 }, fontWeight: 800, color: INK, letterSpacing: "-0.02em" }}>
                       Reset your password
                     </Typography>
-                    <Typography sx={{ mt: 1, mb: 3.5, fontSize: 14.5, color: INK_SOFT, maxWidth: 380, lineHeight: 1.55 }}>
-                      Enter the email for your account and we&apos;ll send you a link to choose a new password.
-                    </Typography>
-
-                    <Box component="form" onSubmit={handleReset} noValidate>
-                      <Stack gap={2}>
-                        <TextField
-                          required
-                          autoFocus
-                          type="email"
-                          label="Email"
-                          autoComplete="email"
-                          inputMode="email"
-                          spellCheck={false}
-                          disabled={busy}
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          placeholder="you@cgiar.org"
-                          fullWidth
-                          size="medium"
-                          sx={inputSx}
-                        />
-
-                        <Box aria-live="polite" role="status" sx={{ minHeight: 0 }}>
-                          <Collapse in={!!formError} timeout={160} unmountOnExit>
-                            <Alert severity="error" onClose={() => setFormError(null)} sx={{ borderRadius: 2.5, fontSize: 13 }}>
-                              {formError}
-                            </Alert>
-                          </Collapse>
-                        </Box>
-
-                        <Button
-                          type="submit"
-                          fullWidth
-                          disableElevation
-                          disabled={busy}
-                          endIcon={!busy ? <ArrowForwardIcon /> : undefined}
-                          startIcon={busy ? <CircularProgress size={16} thickness={5} sx={{ color: "currentColor" }} /> : undefined}
-                          sx={submitSx}
-                        >
-                          {busy ? (stage || "Sending…") : "Send reset link"}
-                        </Button>
-                      </Stack>
-                    </Box>
-
-                    <Typography
-                      sx={{ mt: 3, fontSize: 13.5, color: INK_SOFT, display: "flex", gap: 1, alignItems: "center", justifyContent: "center" }}
-                    >
-                      Remembered it?
+                    <Typography sx={{ fontSize: 14.5, color: INK_SOFT, lineHeight: 1.65, maxWidth: 400 }}>
+                      To reset your password, email{" "}
                       <Box
-                        component="button"
-                        type="button"
-                        onClick={() => switchMode("signin")}
-                        disabled={busy}
-                        sx={{
-                          border: 0, bgcolor: "transparent", p: 0, font: "inherit",
-                          fontFamily: DISPLAY, fontWeight: 700, color: INDIGO, cursor: "pointer",
-                          "&:hover": { textDecoration: "underline" },
-                          "&:disabled": { opacity: 0.4, cursor: "wait" },
-                        }}
+                        component="a"
+                        href={RESET_MAILTO}
+                        sx={{ color: INDIGO, fontWeight: 700, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
                       >
-                        Back to sign in
-                      </Box>
+                        {SUPPORT_EMAIL}
+                      </Box>{" "}
+                      from your account email and we&apos;ll send you a secure link to choose a new one. Your account and all your data stay exactly as they are.
                     </Typography>
-                  </>
+
+                    <Button
+                      component="a"
+                      href={RESET_MAILTO}
+                      fullWidth
+                      disableElevation
+                      endIcon={<ArrowForwardIcon />}
+                      sx={submitSx}
+                    >
+                      Email {SUPPORT_EMAIL}
+                    </Button>
+
+                    <Button
+                      onClick={() => switchMode("signin")}
+                      variant="text"
+                      sx={{ mt: 0.5, color: INDIGO, fontWeight: 700, px: 0, "&:hover": { bgcolor: "transparent", textDecoration: "underline" } }}
+                    >
+                      Back to sign in
+                    </Button>
+                  </Stack>
                 ) : (
                   <Stack alignItems="flex-start" gap={1.5}>
                     <Box
@@ -486,33 +447,21 @@ export default function Login() {
                       <CheckCircleRoundedIcon sx={{ fontSize: 26 }} />
                     </Box>
                     <Typography component="h1" sx={{ fontSize: 24, fontWeight: 800, color: INK, letterSpacing: "-0.02em" }}>
-                      {view === "reset-sent" ? "Check your email" : "Confirm your email"}
+                      Confirm your email
                     </Typography>
                     <Typography sx={{ fontSize: 14, color: INK_SOFT, lineHeight: 1.6 }}>
-                      {view === "reset-sent" ? (
-                        <>
-                          If an account exists for{" "}
-                          <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
-                            {sentEmailRef.current}
-                          </Box>
-                          , we&apos;ve sent a link to reset your password. Open it to choose a new one.
-                        </>
-                      ) : (
-                        <>
-                          We sent a confirmation link to{" "}
-                          <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
-                            {sentEmailRef.current}
-                          </Box>
-                          . Open it to activate your account and land in your workspace.
-                        </>
-                      )}
+                      We sent a confirmation link to{" "}
+                      <Box component="span" sx={{ color: INK, fontWeight: 700 }}>
+                        {sentEmailRef.current}
+                      </Box>
+                      . Open it to activate your account and land in your workspace.
                     </Typography>
                     <Button
                       onClick={() => switchMode("signin")}
                       variant="text"
                       sx={{ mt: 1, color: INDIGO, fontWeight: 700, px: 0, "&:hover": { bgcolor: "transparent", textDecoration: "underline" } }}
                     >
-                      {view === "reset-sent" ? "Back to sign in" : "I’ll confirm later — go to sign in"}
+                      I’ll confirm later — go to sign in
                     </Button>
                   </Stack>
                 )}
