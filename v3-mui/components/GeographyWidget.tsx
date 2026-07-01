@@ -26,6 +26,16 @@ interface Props {
   onSourceFile?: (file: File) => void;
 }
 
+// Signature of just the site-derived pins, so we can tell when the Sites picker
+// changed them (vs. the user drawing on the map).
+function siteSignature(fc: GeoJSONFC | null): string {
+  return JSON.stringify(
+    (fc?.features ?? [])
+      .filter((f: any) => f?.properties?.source === "site")
+      .map((f: any) => [f.properties?.name, f.geometry?.coordinates]),
+  );
+}
+
 function computeBounds(fc: GeoJSONFC): [[number, number], [number, number]] | null {
   let minLng =  Infinity, minLat =  Infinity;
   let maxLng = -Infinity, maxLat = -Infinity;
@@ -44,6 +54,8 @@ export function GeographyWidget({ value, onChange, onSourceFile }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const drawRef = useRef<MapboxDraw | null>(null);
+  const siteSig = useRef<string>("");
+  const mapReady = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<{ id: string; type: string; name: string }[]>(
     () => (value?.features ?? []).map((f: any) => ({
@@ -98,6 +110,8 @@ export function GeographyWidget({ value, onChange, onSourceFile }: Props) {
     map.on("draw.delete", recompute);
 
     map.on("load", () => {
+      mapReady.current = true;
+      siteSig.current = siteSignature(value);
       if (value && value.features?.length) {
         draw.add(value as any);
         const b = computeBounds(value);
@@ -108,49 +122,81 @@ export function GeographyWidget({ value, onChange, onSourceFile }: Props) {
 
     mapRef.current = map;
     drawRef.current = draw;
-    return () => { map.remove(); mapRef.current = null; drawRef.current = null; };
+    return () => { map.remove(); mapRef.current = null; drawRef.current = null; mapReady.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setError(null);
-    try {
-      let gj: any;
-      if (/\.zip$/i.test(f.name)) {
-        const shp = (await import("shpjs")).default;
-        gj = await shp(await f.arrayBuffer());
-      } else if (/\.(geojson|json)$/i.test(f.name)) {
-        gj = JSON.parse(await f.text());
-      } else {
-        setError("Use a .geojson, .json, or zipped shapefile (.zip).");
-        return;
-      }
-      if (gj.type === "Feature") gj = { type: "FeatureCollection", features: [gj] };
-      else if (gj.type !== "FeatureCollection") {
-        gj = { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: gj }] };
-      }
+  // Reconcile site pins pushed in from the Sites picker while the map is open,
+  // without disturbing features the user drew or uploaded.
+  useEffect(() => {
+    const draw = drawRef.current;
+    const map = mapRef.current;
+    if (!draw || !map || !mapReady.current) return;
+    if (siteSignature(value) === siteSig.current) return;   // user's own edit, not the picker
 
-      const draw = drawRef.current;
-      const map = mapRef.current;
-      if (!draw || !map) return;
-      draw.deleteAll();
-      draw.add(gj);
-      const b = computeBounds(gj);
-      if (b) map.fitBounds(b, { padding: 40, maxZoom: 12 });
-      const fc = draw.getAll() as GeoJSONFC;
-      setRows(fc.features.map((f: any) => ({
-        id: String(f.id),
-        type: f.geometry?.type ?? "Unknown",
-        name: (f.properties?.name as string) ?? "",
-      })));
-      onChange(fc.features.length ? fc : null);
-      // Keep the original upload too, not just the parsed geometry.
-      onSourceFile?.(f);
-    } catch (err: any) {
-      setError(`Failed to parse: ${err?.message ?? err}`);
+    const desired = (value?.features ?? []).filter((f: any) => f?.properties?.source === "site");
+    for (const f of (draw.getAll() as GeoJSONFC).features as any[]) {
+      if (f?.properties?.source === "site") draw.delete(String(f.id));
     }
+    if (desired.length) draw.add({ type: "FeatureCollection", features: desired } as any);
+
+    const fc = draw.getAll() as GeoJSONFC;
+    siteSig.current = siteSignature(fc);
+    setRows(fc.features.map((f: any) => ({
+      id: String(f.id),
+      type: f.geometry?.type ?? "Unknown",
+      name: (f.properties?.name as string) ?? "",
+    })));
+    if (desired.length) {
+      const b = computeBounds({ type: "FeatureCollection", features: desired });
+      if (b) map.fitBounds(b, { padding: 50, maxZoom: 12, duration: 600 });
+    }
+    onChange(fc.features.length ? fc : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setError(null);
+    const draw = drawRef.current;
+    const map = mapRef.current;
+    if (!draw || !map) { e.target.value = ""; return; }
+
+    // Each file is appended, so several geometries can be combined for one record.
+    for (const f of files) {
+      try {
+        let gj: any;
+        if (/\.zip$/i.test(f.name)) {
+          const shp = (await import("shpjs")).default;
+          gj = await shp(await f.arrayBuffer());
+        } else if (/\.(geojson|json)$/i.test(f.name)) {
+          gj = JSON.parse(await f.text());
+        } else {
+          setError(`${f.name}: use a .geojson, .json, or zipped shapefile (.zip).`);
+          continue;
+        }
+        if (gj.type === "Feature") gj = { type: "FeatureCollection", features: [gj] };
+        else if (gj.type !== "FeatureCollection") {
+          gj = { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: gj }] };
+        }
+        draw.add(gj);   // append — keep site pins and any earlier geometry
+        const b = computeBounds(gj);
+        if (b) map.fitBounds(b, { padding: 40, maxZoom: 12 });
+        onSourceFile?.(f);   // keep the original file too
+      } catch (err: any) {
+        setError(`${f.name}: failed to parse — ${err?.message ?? err}`);
+      }
+    }
+
+    const fc = draw.getAll() as GeoJSONFC;
+    siteSig.current = siteSignature(fc);   // uploaded features aren't site pins; keep the sync in step
+    setRows(fc.features.map((f: any) => ({
+      id: String(f.id),
+      type: f.geometry?.type ?? "Unknown",
+      name: (f.properties?.name as string) ?? "",
+    })));
+    onChange(fc.features.length ? fc : null);
     e.target.value = "";
   }
 
@@ -202,7 +248,7 @@ export function GeographyWidget({ value, onChange, onSourceFile }: Props) {
       <Stack direction="row" gap={1} mt={1.5} flexWrap="wrap">
         <Button component="label" variant="outlined" size="small" startIcon={<UploadFileIcon />}>
           Upload GeoJSON / Shapefile
-          <input type="file" hidden accept=".geojson,.json,.zip" onChange={onFile} />
+          <input type="file" hidden multiple accept=".geojson,.json,.zip" onChange={onFile} />
         </Button>
         <Button variant="outlined" color="error" size="small" startIcon={<DeleteSweepIcon />} onClick={clearAll} disabled={count === 0}>
           Clear

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, AlertTitle, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress,
   Collapse, Divider, Fade, FormControl, FormHelperText, IconButton, InputLabel, LinearProgress,
@@ -22,6 +22,27 @@ const GeographyWidget = dynamic(() => import("./GeographyWidget").then(m => m.Ge
 const COUNTRIES = getNames().sort();
 const BUCKET = "mfl";
 const MAX_FILE_MB = Math.round(MAX_FILE_BYTES / 1024 / 1024);
+const MB_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN ?? "";
+
+// Split a pipe-delimited multi-value string. Comma is NOT a delimiter here —
+// country names ("Korea, Republic of") and place names ("Machakos, Kenya")
+// contain commas.
+const splitPipe = (s: string) => (s ? s.split(/\s*\|\s*/).map(x => x.trim()).filter(Boolean) : []);
+
+// Merge one named Point feature per geolocated site into a FeatureCollection,
+// replacing any previous site-derived points but keeping features the user drew.
+type GeoFC = { type: "FeatureCollection"; features: any[] };
+function withSitePoints(geometry: GeoFC | null, sites: { name: string; center: [number, number] }[]): GeoFC | null {
+  const others = (geometry?.features ?? []).filter((f: any) => f?.properties?.source !== "site");
+  const points = sites.map((s, i) => ({
+    type: "Feature",
+    id: `site-${Date.now()}-${i}`,
+    properties: { name: s.name, source: "site" },
+    geometry: { type: "Point", coordinates: [s.center[0], s.center[1]] },
+  }));
+  const features = [...others, ...points];
+  return features.length ? { type: "FeatureCollection", features } : null;
+}
 
 // External reference links — provided once, reused via helpText helpers.
 const LINKS = {
@@ -254,8 +275,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     persistLocal(state);
     const { data: u } = await supabase.auth.getUser();
     let geometryPath: string | null = null;
-    if (u.user && state.has_additional_geo === "Y"
-        && state.geometry && state.geometry.features?.length) {
+    if (u.user && state.geometry && state.geometry.features?.length) {
       geometryPath = await uploadGeometry(recordFolder(u.user, state), state.geometry);
     }
     if (u.user) {
@@ -296,7 +316,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     const extras: Record<string, unknown> = {};
     if (attachments.length) extras.attachments = attachments;
     let geoUploadedTo: string | null = null;
-    if (has_additional_geo === "Y" && geometry && geometry.features?.length) {
+    if (geometry && geometry.features?.length) {
       extras.geometry = geometry;
       if (u.user) {
         setSubmitStage("Uploading geometry…");
@@ -445,13 +465,20 @@ function IntroPanel({ onDismiss }: { onDismiss: () => void }) {
         — innovation ID, region, country, innovation description, and innovation type. Dropdowns must match the
         controlled vocabulary; pick <em>Other (specify)</em> when nothing fits and add your value inline.
       </Typography>
-      <Typography variant="body2">
+      <Typography variant="body2" sx={{ mb: 1 }}>
         For free-text fields (challenge, indicators, descriptions), prefer terms from recognised ontologies:{" "}
         <MuiLink href={LINKS.agro}    target="_blank" rel="noopener">AGRO</MuiLink>,{" "}
         <MuiLink href={LINKS.envo}    target="_blank" rel="noopener">ENVO</MuiLink>,{" "}
         <MuiLink href={LINKS.to}      target="_blank" rel="noopener">TO</MuiLink>,{" "}
         <MuiLink href={LINKS.agrovoc} target="_blank" rel="noopener">AGROVOC</MuiLink>,{" "}
         <MuiLink href={LINKS.ncbitaxon} target="_blank" rel="noopener">NCBITaxon</MuiLink>.
+      </Typography>
+      <Typography variant="body2">
+        Not sure what a field or category means?{" "}
+        <MuiLink href="/guide" target="_blank" rel="noopener" sx={{ fontWeight: 700 }}>
+          Open the field guide
+        </MuiLink>{" "}
+        for definitions and examples of every field and option.
       </Typography>
     </Alert>
   );
@@ -615,6 +642,163 @@ function MultiSelectField({
   );
 }
 
+/** Keywords field with live AGROVOC term lookup. Stores pipe-separated labels;
+ *  users pick standardised terms or type their own. */
+function KeywordsField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const selected = value ? value.split(/\s*[|,]\s*/).map(s => s.trim()).filter(Boolean) : [];
+  const [input, setInput] = useState("");
+  const [options, setOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const q = input.trim();
+    if (q.length < 2) { setOptions([]); setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/agrovoc?q=${encodeURIComponent(q)}`);
+        const data = await r.json();
+        if (!active) return;
+        setOptions((data.results ?? []).map((x: any) => x.label as string));
+      } catch {
+        if (active) setOptions([]);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }, 250);
+    return () => { active = false; clearTimeout(t); };
+  }, [input]);
+
+  return (
+    <Autocomplete
+      multiple freeSolo autoHighlight size="small"
+      options={options}
+      filterOptions={(x) => x}          // server already matched; don't re-filter
+      value={selected}
+      inputValue={input}
+      onInputChange={(_, v) => setInput(v)}
+      loading={loading}
+      onChange={(_, v) => onChange((v as string[]).map(s => s.trim()).filter(Boolean).join(" | "))}
+      renderTags={(vals, getTagProps) =>
+        vals.map((option, index) => (
+          <Chip variant="outlined" size="small" label={option} {...getTagProps({ index })} key={`${option}-${index}`} />
+        ))
+      }
+      renderInput={(p) => (
+        <TextField
+          {...p}
+          label="keywords"
+          placeholder="Search AGROVOC — e.g. maize, agroforestry…"
+          helperText={
+            <>
+              Start typing to search{" "}
+              <MuiLink href={LINKS.agrovoc} target="_blank" rel="noopener">AGROVOC</MuiLink>{" "}
+              and pick the matching term. Enter the term <strong>label</strong> (e.g. “maize”), not the URI —
+              you can also type your own keyword and press Enter.
+            </>
+          }
+          InputProps={{
+            ...p.InputProps,
+            endAdornment: (
+              <>
+                {loading ? <CircularProgress size={16} thickness={5} sx={{ mr: 1 }} /> : null}
+                {p.InputProps.endAdornment}
+              </>
+            ),
+          }}
+        />
+      )}
+    />
+  );
+}
+
+/** Multi-site picker backed by Mapbox geocoding. Names are filled from Mapbox,
+ *  and selecting a site reports its centre so the caller can set the primary
+ *  latitude/longitude. Falls back to free text when the token/API is missing. */
+function SitesField({
+  value, onPick,
+}: { value: string; onPick: (sites: { name: string; center: [number, number] | null }[]) => void }) {
+  const selected = splitPipe(value);
+  const [input, setInput] = useState("");
+  const [options, setOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const centers = useRef<Record<string, [number, number]>>({});
+
+  useEffect(() => {
+    const q = input.trim();
+    if (q.length < 2 || !MB_TOKEN) { setOptions([]); setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
+          + `?access_token=${MB_TOKEN}&autocomplete=true&limit=6`;
+        const r = await fetch(url);
+        const data = await r.json();
+        if (!active) return;
+        const labels: string[] = [];
+        for (const f of data.features ?? []) {
+          const label = String(f.place_name ?? f.text ?? "").trim();
+          if (!label) continue;
+          labels.push(label);
+          if (Array.isArray(f.center) && f.center.length === 2) {
+            centers.current[label] = [Number(f.center[0]), Number(f.center[1])];
+          }
+        }
+        setOptions(labels);
+      } catch {
+        if (active) setOptions([]);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }, 250);
+    return () => { active = false; clearTimeout(t); };
+  }, [input]);
+
+  return (
+    <Autocomplete
+      multiple freeSolo autoHighlight size="small"
+      options={options}
+      filterOptions={(x) => x}
+      value={selected}
+      inputValue={input}
+      onInputChange={(_, v) => setInput(v)}
+      loading={loading}
+      onChange={(_, vals) => {
+        const names = (vals as string[]).map(s => s.trim()).filter(Boolean);
+        onPick(names.map(n => ({ name: n, center: centers.current[n] ?? null })));
+      }}
+      renderTags={(vals, getTagProps) =>
+        vals.map((option, index) => (
+          <Chip variant="outlined" size="small" label={option} {...getTagProps({ index })} key={`${option}-${index}`} />
+        ))
+      }
+      renderInput={(p) => (
+        <TextField
+          {...p}
+          label="site_name(s)"
+          placeholder={MB_TOKEN ? "Search a place — e.g. Machakos, Kenya…" : "Type a site name and press Enter…"}
+          helperText={
+            MB_TOKEN
+              ? "Search and select one or more places — names come from Mapbox and set the coordinates automatically. Type a custom name and press Enter if a site isn't listed."
+              : "Type one or more site names and press Enter."
+          }
+          InputProps={{
+            ...p.InputProps,
+            endAdornment: (
+              <>
+                {loading ? <CircularProgress size={16} thickness={5} sx={{ mr: 1 }} /> : null}
+                {p.InputProps.endAdornment}
+              </>
+            ),
+          }}
+        />
+      )}
+    />
+  );
+}
+
 // ─── Step components ────────────────────────────────────────────────────────
 
 function IdentificationStep({ state, set }: StepProps) {
@@ -675,22 +859,7 @@ function IdentificationStep({ state, set }: StepProps) {
           </FormHelperText>
         </FormControl>
 
-        <TextField
-          label={<>keywords <HelpTip text="Comma- or pipe-separated tags for discovery. Prefer ontology terms when possible." /></>}
-          value={state.keywords}
-          onChange={e => set("keywords", e.target.value)}
-          placeholder="e.g. agroforestry | maize | Kenya | conservation-ag"
-          size="small" fullWidth
-          helperText={
-            <>
-              Prefer terms from recognised ontologies:{" "}
-              <MuiLink href={LINKS.agrovoc} target="_blank" rel="noopener">AGROVOC</MuiLink>,{" "}
-              <MuiLink href={LINKS.agro}    target="_blank" rel="noopener">AGRO</MuiLink>,{" "}
-              <MuiLink href={LINKS.envo}    target="_blank" rel="noopener">ENVO</MuiLink>,{" "}
-              <MuiLink href={LINKS.to}      target="_blank" rel="noopener">TO</MuiLink>.
-            </>
-          }
-        />
+        <KeywordsField value={state.keywords} onChange={v => set("keywords", v)} />
 
         <SelectWithOther
           label="thematic_area"
@@ -715,6 +884,9 @@ function IdentificationStep({ state, set }: StepProps) {
 }
 
 function SiteStep({ state, set, onGeoSource }: StepProps & { onGeoSource: (file: File) => void }) {
+  const broadScope =
+    ["Subnational", "National", "Multiscale"].includes(state.innovation_scale) ||
+    state.region === "Global";
   return (
     <>
       <SectionTitle n="02" title="Site & geography" subtitle="Where the innovation is implemented." />
@@ -726,49 +898,77 @@ function SiteStep({ state, set, onGeoSource }: StepProps & { onGeoSource: (file:
               {taxonomy.region.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
             </Select>
           </FormControl>
-          <Autocomplete freeSolo options={COUNTRIES} value={state.country}
-            onInputChange={(_, v) => set("country", v)}
-            renderInput={(p) => <TextField {...p} required label="country *" size="small" />}
-            sx={{ width: "100%" }} />
-        </Stack>
-
-        <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <TextField label="site_name" value={state.site_name} onChange={e => set("site_name", e.target.value)} size="small" fullWidth />
-          <FormControl size="small" fullWidth>
-            <InputLabel>climate_class</InputLabel>
-            <Select label="climate_class" value={state.climate_class} onChange={e => set("climate_class", e.target.value)}>
-              {taxonomy.climate.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-            </Select>
-            <FormHelperText>
-              Köppen–Geiger classification. Not sure which class fits?{" "}
-              <MuiLink href={LINKS.koppen} target="_blank" rel="noopener">See the Köppen map and descriptions</MuiLink>.
-            </FormHelperText>
-          </FormControl>
-        </Stack>
-
-        <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
-          <TextField
-            label="latitude" type="number"
-            inputProps={{ step: "0.000001", min: -90, max: 90 }}
-            value={state.latitude} onChange={e => set("latitude", e.target.value)}
-            size="small" fullWidth
-            error={state.latitude !== "" && (isNaN(Number(state.latitude)) || Number(state.latitude) < -90 || Number(state.latitude) > 90)}
-            helperText="Decimal degrees between −90 and 90."
-          />
-          <TextField
-            label="longitude" type="number"
-            inputProps={{ step: "0.000001", min: -180, max: 180 }}
-            value={state.longitude} onChange={e => set("longitude", e.target.value)}
-            size="small" fullWidth
-            error={state.longitude !== "" && (isNaN(Number(state.longitude)) || Number(state.longitude) < -180 || Number(state.longitude) > 180)}
-            helperText={
-              <>
-                Decimal degrees between −180 and 180.{" "}
-                <MuiLink href={LINKS.decimalDegrees} target="_blank" rel="noopener">Convert DMS → decimal</MuiLink>.
-              </>
+          <Autocomplete
+            multiple freeSolo options={COUNTRIES}
+            value={splitPipe(state.country)}
+            onChange={(_, v) => set("country", (v as string[]).map(s => s.trim()).filter(Boolean).join(" | "))}
+            renderTags={(vals, getTagProps) =>
+              vals.map((o, i) => <Chip variant="outlined" size="small" label={o} {...getTagProps({ index: i })} key={`${o}-${i}`} />)
             }
+            renderInput={(p) => <TextField {...p} required label="country/countries *" size="small" helperText="Select one or more countries." />}
+            sx={{ width: "100%" }}
           />
         </Stack>
+
+        <SitesField
+          value={state.site_name}
+          onPick={(sites) => {
+            set("site_name", sites.map(s => s.name).join(" | "));
+            const geo = sites.filter(s => s.center) as { name: string; center: [number, number] }[];
+            if (geo.length) {
+              const [lng, lat] = geo[0].center;
+              set("longitude", String(+lng.toFixed(6)));
+              set("latitude",  String(+lat.toFixed(6)));
+            }
+            // Keep a named pin for every geolocated site in the map geometry,
+            // and open the map so the pins show directly.
+            set("geometry", withSitePoints(state.geometry, geo));
+            if (geo.length) set("has_additional_geo", "Y");
+          }}
+        />
+
+        <FormControl size="small" fullWidth>
+          <InputLabel>climate_class</InputLabel>
+          <Select label="climate_class" value={state.climate_class} onChange={e => set("climate_class", e.target.value)}>
+            {taxonomy.climate.map(v => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+          </Select>
+          <FormHelperText>
+            Köppen–Geiger classification. Not sure which class fits?{" "}
+            <MuiLink href={LINKS.koppen} target="_blank" rel="noopener">See the Köppen map and descriptions</MuiLink>.
+          </FormHelperText>
+        </FormControl>
+
+        <Box>
+          <Stack direction={{ xs: "column", sm: "row" }} gap={2}>
+            <TextField
+              label="latitude (optional)" type="number"
+              inputProps={{ step: "0.000001", min: -90, max: 90 }}
+              value={state.latitude} onChange={e => set("latitude", e.target.value)}
+              size="small" fullWidth
+              error={state.latitude !== "" && (isNaN(Number(state.latitude)) || Number(state.latitude) < -90 || Number(state.latitude) > 90)}
+              helperText="Decimal degrees between −90 and 90."
+            />
+            <TextField
+              label="longitude (optional)" type="number"
+              inputProps={{ step: "0.000001", min: -180, max: 180 }}
+              value={state.longitude} onChange={e => set("longitude", e.target.value)}
+              size="small" fullWidth
+              error={state.longitude !== "" && (isNaN(Number(state.longitude)) || Number(state.longitude) < -180 || Number(state.longitude) > 180)}
+              helperText={
+                <>
+                  Decimal degrees between −180 and 180.{" "}
+                  <MuiLink href={LINKS.decimalDegrees} target="_blank" rel="noopener">Convert DMS → decimal</MuiLink>.
+                </>
+              }
+            />
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+            Coordinates are optional and are filled automatically from your first site.
+            {broadScope
+              ? " This innovation is national, regional or global in scope — a precise point isn't required. Leave them blank, or use the map below to outline the area."
+              : " Adjust them if you need a more precise point."}
+          </Typography>
+        </Box>
 
         <SelectWithOther
           label="production_system"
@@ -805,9 +1005,10 @@ function SiteStep({ state, set, onGeoSource }: StepProps & { onGeoSource: (file:
                 <ul style={{ margin: 0, paddingLeft: "1.2em" }}>
                   <li>Search a place top-right, then use the toolbar (top-left) to draw a <strong>point</strong>, <strong>line</strong>, or <strong>polygon</strong>.</li>
                   <li><strong>Double-click</strong> to finish a polyline or polygon.</li>
+                  <li>Places you selected under <strong>site_name(s)</strong> already appear here as named pins — rename or remove them like any other feature.</li>
                   <li><strong>Name every feature</strong> in the list under the map — names are saved with the GeoJSON and travel with the record.</li>
                   <li>Use the trash tool to delete a feature, or the zoom icon next to a feature row to focus the map on it.</li>
-                  <li>Or upload a <strong>.geojson</strong> or zipped <strong>shapefile</strong>; everything you draw or upload is saved as one FeatureCollection both inline and as a file in the <code>mfl</code> bucket on submit.</li>
+                  <li>Upload one or more <strong>.geojson</strong> or zipped <strong>shapefiles</strong> — each is <strong>added</strong> to what's already on the map, so you can combine several geometries. Everything (site pins, drawings, uploads) is saved as one FeatureCollection, both inline and as a file in the <code>mfl</code> bucket on submit.</li>
                 </ul>
               </Typography>
             </Alert>

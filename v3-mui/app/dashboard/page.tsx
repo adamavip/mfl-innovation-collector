@@ -13,6 +13,7 @@ import EditNoteIcon from "@mui/icons-material/EditNote";
 import TableRowsIcon from "@mui/icons-material/TableRows";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import InventoryOutlinedIcon from "@mui/icons-material/InventoryOutlined";
+import MenuBookOutlinedIcon from "@mui/icons-material/MenuBookOutlined";
 import { FormMode } from "@/components/FormMode";
 import { WelcomeView } from "@/components/WelcomeView";
 import { AgGridReact } from "ag-grid-react";
@@ -231,6 +232,26 @@ export default function Dashboard() {
           </ToggleButtonGroup>
 
           <Box sx={{ flexGrow: 1 }} />
+
+          <Button
+            component={Link}
+            href="/guide"
+            target="_blank"
+            rel="noopener"
+            size="small"
+            startIcon={<MenuBookOutlinedIcon fontSize="small" />}
+            sx={{
+              borderRadius: 999,
+              px: 1.75,
+              fontFamily: DISPLAY,
+              fontWeight: 700,
+              color: INK_SOFT,
+              display: { xs: "none", sm: "inline-flex" },
+              "&:hover": { bgcolor: "rgba(22,19,58,0.06)", color: INK },
+            }}
+          >
+            Guide
+          </Button>
 
           <Typography
             variant="caption"
