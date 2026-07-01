@@ -21,6 +21,9 @@ interface GeoJSONFC { type: "FeatureCollection"; features: any[] }
 interface Props {
   value: GeoJSONFC | null;
   onChange: (g: GeoJSONFC | null) => void;
+  /** Called with the raw uploaded file (.geojson/.json/.zip) after it parses,
+   *  so the caller can keep the original alongside the parsed geometry. */
+  onSourceFile?: (file: File) => void;
 }
 
 function computeBounds(fc: GeoJSONFC): [[number, number], [number, number]] | null {
@@ -37,7 +40,7 @@ function computeBounds(fc: GeoJSONFC): [[number, number], [number, number]] | nu
   return [[minLng, minLat], [maxLng, maxLat]];
 }
 
-export function GeographyWidget({ value, onChange }: Props) {
+export function GeographyWidget({ value, onChange, onSourceFile }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const drawRef = useRef<MapboxDraw | null>(null);
@@ -143,6 +146,8 @@ export function GeographyWidget({ value, onChange }: Props) {
         name: (f.properties?.name as string) ?? "",
       })));
       onChange(fc.features.length ? fc : null);
+      // Keep the original upload too, not just the parsed geometry.
+      onSourceFile?.(f);
     } catch (err: any) {
       setError(`Failed to parse: ${err?.message ?? err}`);
     }

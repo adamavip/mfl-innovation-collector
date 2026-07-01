@@ -134,6 +134,7 @@ export interface ColumnDef {
 
 export const COLS: ColumnDef[] = [
   { field: "innovation_id",               group: "Identification",   type: "free",     width: 180 },
+  { field: "innovation_name",             group: "Identification",   type: "free",     width: 150 },
   { field: "region",                      group: "Site",             type: "dropdown", dv: "region",          width: 130 },
   { field: "country",                     group: "Site",             type: "free",     width: 150 },
   { field: "site_name",                   group: "Site",             type: "free",     width: 180 },
@@ -197,7 +198,7 @@ export const GROUP_COLOURS: Record<string, string> = {
 };
 
 export const REQUIRED_FIELDS = [
-  "innovation_id", "region", "country", "innovation_description", "innovation_type",
+  "innovation_id", "innovation_name", "region", "country", "innovation_description", "innovation_type",
 ] as const;
 
 export type RowData = Partial<Record<(typeof COLS)[number]["field"], string | number | null>>;

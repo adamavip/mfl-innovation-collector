@@ -113,9 +113,16 @@ export default function Dashboard() {
   }, []);
 
   // Open a submitted innovation in the form for edit/update.
-  function loadInnovation(innov: any) {
+  async function loadInnovation(innov: any) {
+    // Always reload the complete row — some callers (e.g. the welcome cards)
+    // only carry a summary projection, which would blank out unselected fields.
+    let full = innov;
+    if (innov?.id) {
+      const { data } = await supabase.from("innovations").select("*").eq("id", innov.id).single();
+      if (data) full = data;
+    }
     const recForForm: Record<string, unknown> = {};
-    for (const c of COLS) recForForm[c.field] = (innov as any)[c.field] ?? "";
+    for (const c of COLS) recForForm[c.field] = (full as any)[c.field] ?? "";
     // numeric → string for the form's TextField inputs
     for (const k of [
       "latitude", "longitude",
@@ -126,12 +133,12 @@ export default function Dashboard() {
       const v = recForForm[k];
       recForForm[k] = v === null || v === undefined ? "" : String(v);
     }
-    recForForm.attachments = innov.extras?.attachments ?? [];
-    recForForm.geometry    = innov.extras?.geometry ?? null;
-    recForForm.has_additional_geo = (innov.extras?.geometry?.features?.length ?? 0) > 0 ? "Y" : "N";
+    recForForm.attachments = full.extras?.attachments ?? [];
+    recForForm.geometry    = full.extras?.geometry ?? null;
+    recForForm.has_additional_geo = (full.extras?.geometry?.features?.length ?? 0) > 0 ? "Y" : "N";
     try {
       localStorage.setItem(SHARED_KEY, JSON.stringify(recForForm));
-      localStorage.setItem(EDITING_KEY, innov.id);
+      localStorage.setItem(EDITING_KEY, full.id);
     } catch {}
     setMode("form");
     setFormKey(k => k + 1);

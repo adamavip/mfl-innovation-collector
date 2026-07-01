@@ -21,6 +21,7 @@ import dynamic from "next/dynamic";
 const GeographyWidget = dynamic(() => import("./GeographyWidget").then(m => m.GeographyWidget), { ssr: false });
 const COUNTRIES = getNames().sort();
 const BUCKET = "mfl";
+const MAX_FILE_MB = Math.round(MAX_FILE_BYTES / 1024 / 1024);
 
 // External reference links — provided once, reused via helpText helpers.
 const LINKS = {
@@ -43,6 +44,7 @@ interface Attachment {
 
 export interface FormState {
   innovation_id: string;
+  innovation_name: string;
   innovation_description: string;
   innovation_type: string;
   innovation_scale: string;
@@ -107,12 +109,13 @@ const STEPS = [
 ];
 
 const REQUIRED: (keyof FormState)[] = [
-  "innovation_id", "region", "country", "innovation_description", "innovation_type",
+  "innovation_id", "innovation_name", "region", "country", "innovation_description", "innovation_type",
   "innovation_description_url",
 ];
 
 const initialState = (): FormState => ({
   innovation_id: crypto.randomUUID(),
+  innovation_name: "",
   innovation_description: "", innovation_type: "", innovation_scale: "", scaling_readiness_level: "",
   keywords: "",
   region: "", country: "", site_name: "", climate_class: "", latitude: "", longitude: "",
@@ -137,6 +140,32 @@ const DRAFT_KEY        = "mfl-shared-record";
 const EDITING_KEY      = "mfl-editing-id";
 const ACTIVE_DRAFT_KEY = "mfl-active-draft-id";
 const INTRO_KEY        = "mfl-intro-dismissed";
+
+// ── Storage folder layout ────────────────────────────────────────────────────
+// firstname_lastname_userid / innovationname_innovationid / {geometries|data} / <file>
+function slugify(s: string): string {
+  return (s || "")
+    .normalize("NFKD")                          // decompose accents; the alnum filter below drops the marks
+    .trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function recordFolder(user: any, state: FormState): string {
+  const who = [slugify(user?.user_metadata?.first_name ?? ""), slugify(user?.user_metadata?.last_name ?? "")]
+    .filter(Boolean).join("_") || "user";
+  const person     = `${who}_${user?.id ?? "unknown"}`;
+  const innovation = `${slugify(state.innovation_name) || "innovation"}_${state.innovation_id}`;
+  return `${person}/${innovation}`;
+}
+
+// The folder is derived from the innovation name, so it must be set before any
+// file can be filed. (User id and innovation id are always present.)
+function uploadBlockReason(state: FormState): string | null {
+  if (!state.innovation_name.trim())
+    return "Add a short innovation name (Identification step) before uploading files.";
+  return null;
+}
 
 export function FormMode({ onDone }: { onDone?: () => void }) {
   const [state, setState] = useState<FormState>(initialState);
@@ -186,14 +215,38 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     [state],
   );
 
-  async function uploadGeometry(userId: string, innovationId: string,
+  async function uploadGeometry(folder: string,
                                 geometry: { type: "FeatureCollection"; features: any[] }) {
     const blob = new Blob([JSON.stringify(geometry, null, 2)], { type: "application/geo+json" });
-    const path = `${userId}/${innovationId}/geometry.geojson`;
+    const path = `${folder}/geometries/geometry.geojson`;
     const { error } = await supabase.storage.from(BUCKET).upload(path, blob, {
       contentType: "application/geo+json", upsert: true,
     });
     return error ? null : path;
+  }
+
+  // Store the original geospatial upload (.geojson/.json/.zip) in the mfl bucket
+  // as an attachment, alongside the parsed geometry.geojson.
+  async function handleGeoSource(file: File) {
+    const { data: u } = await supabase.auth.getUser();
+    if (!u.user) { setSnack({ severity: "error", text: "Sign in expired — refresh the page." }); return; }
+    const block = uploadBlockReason(state);
+    if (block) { setSnack({ severity: "error", text: block }); return; }
+    if (file.size > MAX_FILE_BYTES) {
+      setSnack({ severity: "error", text: `${file.name}: exceeds ${MAX_FILE_MB} MB — parsed geometry was kept, but the source file wasn't stored.` });
+      return;
+    }
+    const safeName = file.name.replace(/[^\w.\-]/g, "_");
+    const path = `${recordFolder(u.user, state)}/geometries/${Date.now()}_${safeName}`;
+    const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
+      contentType: file.type || "application/octet-stream", upsert: false,
+    });
+    if (error) { setSnack({ severity: "error", text: `${file.name}: ${error.message}` }); return; }
+    set("attachments", [
+      ...(state.attachments ?? []),
+      { filename: file.name, mime_type: file.type, size_bytes: file.size, path, description: "Source geometry file" },
+    ]);
+    setSnack({ severity: "success", text: `${file.name} stored with the record` });
   }
 
   async function saveDraft() {
@@ -203,7 +256,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
     let geometryPath: string | null = null;
     if (u.user && state.has_additional_geo === "Y"
         && state.geometry && state.geometry.features?.length) {
-      geometryPath = await uploadGeometry(u.user.id, state.innovation_id, state.geometry);
+      geometryPath = await uploadGeometry(recordFolder(u.user, state), state.geometry);
     }
     if (u.user) {
       const draftRow = { __form_mode: true, ...state, ...(geometryPath ? { geometry_file_path: geometryPath } : {}) };
@@ -247,7 +300,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
       extras.geometry = geometry;
       if (u.user) {
         setSubmitStage("Uploading geometry…");
-        const path = await uploadGeometry(u.user.id, state.innovation_id, geometry);
+        const path = await uploadGeometry(recordFolder(u.user, state), geometry);
         if (path) { extras.geometry_file_path = path; geoUploadedTo = path; }
       }
     }
@@ -313,7 +366,7 @@ export function FormMode({ onDone }: { onDone?: () => void }) {
         </Fade>
         <CardContent sx={{ p: 4 }}>
           {activeStep === 0 && <IdentificationStep state={state} set={set} />}
-          {activeStep === 1 && <SiteStep state={state} set={set} />}
+          {activeStep === 1 && <SiteStep state={state} set={set} onGeoSource={handleGeoSource} />}
           {activeStep === 2 && <ChallengeAndDataStep state={state} set={set} />}
           {activeStep === 3 && <TestingValidationStep state={state} set={set} />}
           {activeStep === 4 && <OrganisationsStep state={state} set={set} />}
@@ -574,6 +627,17 @@ function IdentificationStep({ state, set }: StepProps) {
                    sx={{ "& input": { fontFamily: "monospace", fontSize: 12 } }} />
 
         <TextField
+          required
+          label={<>innovation_name <HelpTip text="A short label for the innovation (up to 20 characters). Used to name its folder in storage." /></>}
+          value={state.innovation_name}
+          onChange={e => set("innovation_name", e.target.value)}
+          inputProps={{ maxLength: 20 }}
+          size="small" fullWidth
+          error={state.innovation_name.length > 20}
+          helperText={`Short name — up to 20 characters. ${state.innovation_name.length}/20`}
+        />
+
+        <TextField
           required label={<>innovation_description <HelpTip text="A short, plain-language description of the innovation (the official name plus a 1-line summary)." /></>}
           value={state.innovation_description}
           onChange={e => set("innovation_description", e.target.value)}
@@ -650,7 +714,7 @@ function IdentificationStep({ state, set }: StepProps) {
   );
 }
 
-function SiteStep({ state, set }: StepProps) {
+function SiteStep({ state, set, onGeoSource }: StepProps & { onGeoSource: (file: File) => void }) {
   return (
     <>
       <SectionTitle n="02" title="Site & geography" subtitle="Where the innovation is implemented." />
@@ -747,7 +811,7 @@ function SiteStep({ state, set }: StepProps) {
                 </ul>
               </Typography>
             </Alert>
-            <GeographyWidget value={state.geometry} onChange={g => set("geometry", g)} />
+            <GeographyWidget value={state.geometry} onChange={g => set("geometry", g)} onSourceFile={onGeoSource} />
           </Box>
         )}
       </Stack>
@@ -1041,11 +1105,13 @@ function RawDataStep({ state, set }: StepProps) {
     setUploading(true); setError(null);
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) { setError("Sign in expired — refresh the page."); setUploading(false); return; }
+    const block = uploadBlockReason(state);
+    if (block) { setError(block); setUploading(false); return; }
     const added: Attachment[] = [];
     for (const f of files) {
-      if (f.size > MAX_FILE_BYTES) { setError(`${f.name}: exceeds 50 MB — skipped.`); continue; }
+      if (f.size > MAX_FILE_BYTES) { setError(`${f.name}: exceeds ${MAX_FILE_MB} MB — skipped.`); continue; }
       const safeName = f.name.replace(/[^\w.\-]/g, "_");
-      const path = `${u.user.id}/${state.innovation_id}/${Date.now()}_${safeName}`;
+      const path = `${recordFolder(u.user, state)}/data/${Date.now()}_${safeName}`;
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, f, {
         contentType: f.type || "application/octet-stream", upsert: false,
       });
