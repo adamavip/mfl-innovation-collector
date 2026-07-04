@@ -1,7 +1,11 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Stack, Typography } from "@mui/material";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
+import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
+import VolumeOffRoundedIcon from "@mui/icons-material/VolumeOffRounded";
 import VerifiedOutlinedIcon from "@mui/icons-material/VerifiedOutlined";
 import EditNoteOutlinedIcon from "@mui/icons-material/EditNoteOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
@@ -95,6 +99,94 @@ function MiniArt() {
       <Cube x={130} y={150} w={56} h={64} top="#E9E5FA" left="#C7C0EE" right="#B0A7E2" cls="flo b" spin="spin s4" />
       <Cube x={250} y={190} w={58} h={66} top="#FFFFFF" left="#E6E6F1" right="#D2D2E2" cls="flo d" spin="spin s1" />
       <circle className="flo e" cx="214" cy="172" r="20" fill="url(#orange2)" />
+    </Box>
+  );
+}
+
+// Hero demo reel: muted autoplay by default, with a lightweight custom play/mute
+// control (native <video> controls would clash with the rest of the chrome).
+function DemoVideo() {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(true);
+  const [muted, setMuted] = useState(true);
+
+  return (
+    <Box
+      className="rise"
+      sx={{
+        position: "relative",
+        borderRadius: { xs: 4, md: "32px" },
+        overflow: "hidden",
+        boxShadow: "0 40px 90px rgba(22,19,58,0.16)",
+        border: "1px solid rgba(22,19,58,0.06)",
+        lineHeight: 0,
+        "&:hover .demo-controls": { opacity: 1 },
+      }}
+    >
+      <Box
+        component="video"
+        ref={ref}
+        autoPlay
+        muted
+        loop
+        playsInline
+        poster="/mic-promo-poster.jpg"
+        onClick={() => {
+          const v = ref.current;
+          if (!v) return;
+          if (v.paused) { v.play(); setPlaying(true); } else { v.pause(); setPlaying(false); }
+        }}
+        sx={{ width: "100%", height: "auto", display: "block", cursor: "pointer", bgcolor: NAVY }}
+      >
+        <source src="/mic-promo-web.mp4" type="video/mp4" />
+      </Box>
+
+      <Stack
+        className="demo-controls"
+        direction="row"
+        alignItems="center"
+        gap={1}
+        sx={{
+          position: "absolute", left: 18, bottom: 18,
+          opacity: { xs: 1, md: 0 }, transition: "opacity .2s ease",
+        }}
+      >
+        <Box
+          component="button"
+          aria-label={playing ? "Pause demo video" : "Play demo video"}
+          onClick={() => {
+            const v = ref.current;
+            if (!v) return;
+            if (v.paused) { v.play(); setPlaying(true); } else { v.pause(); setPlaying(false); }
+          }}
+          sx={{
+            display: "grid", placeItems: "center", width: 44, height: 44, borderRadius: "50%",
+            border: "none", cursor: "pointer", bgcolor: "rgba(255,255,255,0.92)", color: INK,
+            boxShadow: "0 8px 20px rgba(22,19,58,0.2)",
+            "&:hover": { bgcolor: "#fff" },
+          }}
+        >
+          {playing ? <PauseRoundedIcon /> : <PlayArrowRoundedIcon />}
+        </Box>
+        <Box
+          component="button"
+          aria-label={muted ? "Unmute demo video" : "Mute demo video"}
+          onClick={() => {
+            const v = ref.current;
+            if (!v) return;
+            v.muted = !v.muted;
+            setMuted(v.muted);
+          }}
+          sx={{
+            display: "grid", placeItems: "center", width: 44, height: 44, borderRadius: "50%",
+            border: "none", cursor: "pointer", bgcolor: "rgba(255,255,255,0.92)", color: INK,
+            boxShadow: "0 8px 20px rgba(22,19,58,0.2)",
+            "&:hover": { bgcolor: "#fff" },
+          }}
+        >
+          {muted ? <VolumeOffRoundedIcon /> : <VolumeUpRoundedIcon />}
+        </Box>
+      </Stack>
     </Box>
   );
 }
@@ -223,6 +315,11 @@ export default function Landing() {
           <Box sx={{ mt: 4 }}>
             <PillButton href="/login" variant="indigo" endIcon={<ArrowForwardIcon />}>Start collecting</PillButton>
           </Box>
+        </Box>
+
+        {/* ── Demo reel ─────────────────────────────────────────────────── */}
+        <Box sx={{ px: { xs: 3, sm: 4, md: 6 }, pt: { xs: 6, md: 8 } }}>
+          <DemoVideo />
         </Box>
 
         {/* ── Service cards ─────────────────────────────────────────────── */}

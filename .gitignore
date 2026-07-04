@@ -44,9 +44,11 @@ supabase/.branches/
 downloads/
 
 # ── Public media assets (videos, sounds, brand files) ─────────
-# Everything in public/ stays local except the nav logo the app needs.
+# Everything in public/ stays local except assets the deployed app needs.
 v3-mui/public/*
 !v3-mui/public/mic2.svg
+!v3-mui/public/mic-promo-web.mp4
+!v3-mui/public/mic-promo-poster.jpg
 
 # ── TypeScript ────────────────────────────────────────────────
 *.tsbuildinfo
