@@ -20,14 +20,12 @@ export const DISPLAY =
 // ── Logo ─────────────────────────────────────────────────────────────────────
 export function Logo({ onDark = false }: { onDark?: boolean }) {
   return (
-    <Stack direction="row" alignItems="center" gap={1.25} sx={{ flexShrink: 0 }}>
+    <Stack direction="row" alignItems="center" gap={1.15} sx={{ flexShrink: 0 }}>
       <Box
-        sx={{
-          width: 30,
-          height: 30,
-          borderRadius: "9px",
-          background: `linear-gradient(135deg, ${INDIGO}, #8E80F5)`,
-        }}
+        component="img"
+        src="/mic2.svg"
+        alt="MFL Innovation Collector logo"
+        sx={{ height: 36, width: "auto", display: "block" }}
       />
       <Typography
         sx={{
@@ -38,7 +36,7 @@ export function Logo({ onDark = false }: { onDark?: boolean }) {
           color: onDark ? "#fff" : INK,
         }}
       >
-        MFL
+        MIC
         <Box component="span" sx={{ color: onDark ? "#A99CFF" : INDIGO }}>
           .
         </Box>

@@ -170,7 +170,7 @@ export default function Landing() {
         >
           {/* left */}
           <Box sx={{ px: { xs: 3, sm: 4, md: 6 }, py: { xs: 5, md: 8 }, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <Box className="rise r1"><Eyebrow label="Multifunctional Landscapes" /></Box>
+            <Box className="rise r1"><Eyebrow label="MFL Innovation Collector" /></Box>
             <Typography
               className="rise r2"
               component="h1"

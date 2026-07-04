@@ -43,6 +43,11 @@ supabase/.branches/
 # ── Files generated at runtime (geometry/attachment downloads) ─
 downloads/
 
+# ── Public media assets (videos, sounds, brand files) ─────────
+# Everything in public/ stays local except the nav logo the app needs.
+v3-mui/public/*
+!v3-mui/public/mic2.svg
+
 # ── TypeScript ────────────────────────────────────────────────
 *.tsbuildinfo
 next-env.d.ts
